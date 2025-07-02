@@ -1303,7 +1303,7 @@ def validate_ivr_nodes(ivr_nodes: List[Dict[str, Any]]) -> List[str]:
                         if quote_start != -1 and quote_end != -1 and quote_end > quote_start:
                             # Get node ID (everything before the bracket/quote)
                             before_bracket = target_part[:quote_start]
-                            id_match = re.search(r'([A-Z]+)\s*[\[{]?\s*
+                            id_match = re.search(r'([A-Z]+)\s*[\[{]?\s*$', before_bracket)
         
         # Fallback: If we still don't have text for a node, try to extract it more aggressively
         for line in lines:
@@ -2835,7 +2835,7 @@ def validate_ivr_nodes(ivr_nodes: List[Dict[str, Any]]) -> List[str]:
                         if quote_start != -1 and quote_end != -1 and quote_end > quote_start:
                             # Get node ID (everything before the bracket/quote)
                             before_bracket = source_part[:quote_start]
-                            id_match = re.search(r'([A-Z]+)\s*[\[{]?\s*
+                            id_match = re.search(r'([A-Z]+)\s*[\[{]?\s*$', before_bracket)
         
         # Fallback: If we still don't have text for a node, try to extract it more aggressively
         for line in lines:
@@ -3608,7 +3608,7 @@ def validate_ivr_nodes(ivr_nodes: List[Dict[str, Any]]) -> List[str]:
                         if quote_start != -1 and quote_end != -1 and quote_end > quote_start:
                             # Get node ID (everything before the bracket/quote)
                             before_bracket = target_part[:quote_start]
-                            id_match = re.search(r'([A-Z]+)\s*[\[{]?\s*
+                            id_match = re.search(r'([A-Z]+)\s*[\[{]?\s*$', before_bracket)
         
         # Fallback: If we still don't have text for a node, try to extract it more aggressively
         for line in lines:
