@@ -1,4 +1,4 @@
-"""
+""""""
 Complete Database-Driven Mermaid to IVR Converter
 Uses cf_general_structure.csv to map text to actual voice files
 Generates production-ready IVR code with real callflow IDs
@@ -388,7 +388,7 @@ class DatabaseDrivenIVRConverter:
 
     def _parse_mermaid(self, mermaid_code: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, str]]]:
         """Parse mermaid code into nodes and connections"""
-        lines = [line.strip() for line in mermaid_code.split('\\n') if line.strip()]
+        lines = [line.strip() for line in mermaid_code.split('\n') if line.strip()]
         
         nodes = []
         connections = []
@@ -400,35 +400,48 @@ class DatabaseDrivenIVRConverter:
                 
             # Parse connections and extract nodes
             if '-->' in line:
-                # Extract connection parts
-                parts = line.split('-->')
-                if len(parts) >= 2:
-                    source_part = parts[0].strip()
-                    target_part = parts[1].strip()
-                    
-                    # Extract source node
-                    source_match = re.search(r'([A-Z]+)(?:\\[([^\\]]+)\\])?', source_part)
-                    if source_match:
-                        source_id = source_match.group(1)
-                        source_text = source_match.group(2) if source_match.group(2) else source_id
-                        node_texts[source_id] = source_text
-                    
-                    # Extract target node and connection label
-                    label_match = re.search(r'\\|([^|]+)\\|', target_part)
-                    connection_label = label_match.group(1).strip('"') if label_match else ""
-                    
-                    target_match = re.search(r'([A-Z]+)(?:\\[([^\\]]+)\\]|\\{([^}]+)\\})?', target_part)
-                    if target_match:
-                        target_id = target_match.group(1)
-                        target_text = target_match.group(2) or target_match.group(3) or target_id
-                        node_texts[target_id] = target_text
+                try:
+                    # Extract connection parts
+                    parts = line.split('-->')
+                    if len(parts) >= 2:
+                        source_part = parts[0].strip()
+                        target_part = parts[1].strip()
                         
-                        # Add connection
-                        connections.append({
-                            'source': source_id,
-                            'target': target_id,
-                            'label': connection_label
-                        })
+                        # Extract source node - handle both inline definitions and references
+                        source_match = re.search(r'([A-Z]+)(?:\[([^\]]+)\])?', source_part)
+                        if source_match:
+                            source_id = source_match.group(1)
+                            source_text = source_match.group(2) if source_match.group(2) else source_id
+                            # Clean HTML tags from text
+                            source_text = re.sub(r'<br\s*/?>', ' ', source_text)
+                            source_text = re.sub(r'<[^>]+>', '', source_text)
+                            node_texts[source_id] = source_text.strip()
+                        
+                        # Extract connection label
+                        label_match = re.search(r'\|"([^"]+)"\|', target_part)
+                        if not label_match:
+                            label_match = re.search(r'\|([^|]+)\|', target_part)
+                        connection_label = label_match.group(1).strip('"') if label_match else ""
+                        
+                        # Extract target node - handle both rectangular and diamond shapes
+                        target_match = re.search(r'([A-Z]+)(?:\[([^\]]+)\]|\{([^}]+)\})?', target_part)
+                        if target_match:
+                            target_id = target_match.group(1)
+                            target_text = target_match.group(2) or target_match.group(3) or target_id
+                            # Clean HTML tags from text
+                            target_text = re.sub(r'<br\s*/?>', ' ', target_text)
+                            target_text = re.sub(r'<[^>]+>', '', target_text)
+                            node_texts[target_id] = target_text.strip()
+                            
+                            # Add connection
+                            connections.append({
+                                'source': source_id,
+                                'target': target_id,
+                                'label': connection_label
+                            })
+                except Exception as e:
+                    print(f"Error parsing line: {line} - {e}")
+                    continue
         
         # Create node objects with proper classification
         for node_id, node_text in node_texts.items():
@@ -535,22 +548,33 @@ class DatabaseDrivenIVRConverter:
 
     def _generate_database_driven_flow(self, nodes: List[Dict[str, Any]], connections: List[Dict[str, str]], notes: List[str]) -> List[Dict[str, Any]]:
         """Generate complete IVR flow using database-driven approach"""
+        if not nodes:
+            notes.append("No nodes to process")
+            return []
+            
         ivr_nodes = []
         used_labels = set()
         
-        # Process each node
+        # Create a mapping of node IDs to their generated labels for cross-referencing
+        node_id_to_label = {}
+        
+        # First pass: Generate labels for all nodes
         for node in nodes:
-            # Ensure unique labels
             label = node['label']
             counter = 2
             while label in used_labels:
                 label = f"{node['label']} {counter}"
                 counter += 1
             used_labels.add(label)
+            node_id_to_label[node['id']] = label
+        
+        # Second pass: Generate IVR nodes with proper cross-references
+        for node in nodes:
+            label = node_id_to_label[node['id']]
             
             # Generate IVR node(s) based on type
             node_connections = [conn for conn in connections if conn['source'] == node['id']]
-            generated_nodes = self._create_database_node(node, label, node_connections, notes)
+            generated_nodes = self._create_database_node_with_mapping(node, label, node_connections, node_id_to_label, notes)
             
             for ivr_node in generated_nodes:
                 ivr_nodes.append(ivr_node)
@@ -559,6 +583,51 @@ class DatabaseDrivenIVRConverter:
         self._ensure_standard_handlers(ivr_nodes, used_labels, notes)
         
         return ivr_nodes
+
+    def _create_database_node_with_mapping(self, node: Dict[str, Any], label: str, connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]) -> List[Dict[str, Any]]:
+        """Create IVR node(s) using database matching with proper label mapping"""
+        text = node['text']
+        node_type = node.get('type', NodeType.ACTION)
+        
+        # Intelligent segmentation using database
+        segments, variables = self._intelligent_segmentation(text)
+        play_log, play_prompt = self._generate_database_prompts(segments, variables, notes)
+        
+        # Create base node following allflows property order
+        ivr_node = {}
+        
+        # Property order: label → playLog → playPrompt → getDigits → branch → maxLoop → gosub → goto → nobarge
+        ivr_node["label"] = label
+        
+        if len(play_log) > 1:
+            ivr_node["playLog"] = play_log
+        elif play_log:
+            ivr_node["playLog"] = play_log[0]
+        
+        if len(play_prompt) > 1:
+            ivr_node["playPrompt"] = play_prompt
+        elif play_prompt:
+            ivr_node["playPrompt"] = play_prompt[0]
+        
+        # Add interaction logic based on node type and connections
+        if node_type == NodeType.WELCOME and connections:
+            self._add_welcome_logic_with_mapping(ivr_node, connections, node_id_to_label, notes)
+        elif node_type == NodeType.PIN_ENTRY:
+            self._add_pin_logic_with_mapping(ivr_node, connections, node_id_to_label, notes)
+        elif node_type == NodeType.AVAILABILITY and connections:
+            self._add_availability_logic_with_mapping(ivr_node, connections, node_id_to_label, notes)
+        elif node_type == NodeType.RESPONSE:
+            self._add_response_logic(ivr_node, label, notes)
+        elif node_type == NodeType.SLEEP:
+            self._add_sleep_logic_with_mapping(ivr_node, connections, node_id_to_label, notes)
+        elif connections and len(connections) > 1:
+            self._add_decision_logic_with_mapping(ivr_node, connections, node_id_to_label, notes)
+        elif connections and len(connections) == 1:
+            target_id = connections[0]['target']
+            target_label = node_id_to_label.get(target_id, target_id)
+            ivr_node["goto"] = target_label
+        
+        return [ivr_node]
 
     def _create_database_node(self, node: Dict[str, Any], label: str, connections: List[Dict[str, str]], notes: List[str]) -> List[Dict[str, Any]]:
         """Create IVR node(s) using database matching"""
@@ -604,8 +673,8 @@ class DatabaseDrivenIVRConverter:
         
         return [ivr_node]
 
-    def _add_welcome_logic(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], notes: List[str]):
-        """Add welcome node logic following allflows patterns"""
+    def _add_welcome_logic_with_mapping(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]):
+        """Add welcome node logic following allflows patterns with proper label mapping"""
         ivr_node["getDigits"] = {
             "numDigits": 1,
             "maxTime": 1,  # Very short timeout for main menu
@@ -618,11 +687,12 @@ class DatabaseDrivenIVRConverter:
         
         for conn in connections:
             label = conn['label'].lower()
-            digit_match = re.search(r'(\\d+)', label)
+            digit_match = re.search(r'(\d+)', label)
             
             if digit_match:
                 digit = digit_match.group(1)
-                target_label = self._map_connection_to_label(conn)
+                target_id = conn['target']
+                target_label = node_id_to_label.get(target_id, target_id)
                 branch[digit] = target_label
                 valid_choices.append(digit)
         
@@ -633,8 +703,8 @@ class DatabaseDrivenIVRConverter:
         # Add retry logic
         ivr_node["maxLoop"] = ["Main", 3, "Problems"]
 
-    def _add_pin_logic(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], notes: List[str]):
-        """Add PIN entry logic following allflows patterns"""
+    def _add_pin_logic_with_mapping(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]):
+        """Add PIN entry logic following allflows patterns with proper label mapping"""
         ivr_node["getDigits"] = {
             "numDigits": 5,  # 4 digits + pound
             "maxTries": 3,
@@ -649,15 +719,19 @@ class DatabaseDrivenIVRConverter:
             branch = {}
             for conn in connections:
                 if 'yes' in conn['label'].lower() or 'correct' in conn['label'].lower():
-                    branch["match"] = self._map_connection_to_label(conn)
+                    target_id = conn['target']
+                    target_label = node_id_to_label.get(target_id, target_id)
+                    branch["match"] = target_label
                 elif 'no' in conn['label'].lower() or 'invalid' in conn['label'].lower():
-                    branch["nomatch"] = self._map_connection_to_label(conn)
+                    target_id = conn['target']
+                    target_label = node_id_to_label.get(target_id, target_id)
+                    branch["nomatch"] = target_label
             
             if branch:
                 ivr_node["branch"] = branch
 
-    def _add_availability_logic(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], notes: List[str]):
-        """Add availability check logic following allflows patterns"""
+    def _add_availability_logic_with_mapping(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]):
+        """Add availability check logic following allflows patterns with proper label mapping"""
         ivr_node["getDigits"] = {
             "numDigits": 1,
             "maxTries": 3,
@@ -670,17 +744,67 @@ class DatabaseDrivenIVRConverter:
         branch = {}
         for conn in connections:
             label = conn['label'].lower()
+            target_id = conn['target']
+            target_label = node_id_to_label.get(target_id, target_id)
+            
             if '1' in label or 'accept' in label:
-                branch["1"] = "Accept"
+                branch["1"] = target_label
             elif '3' in label or 'decline' in label:
-                branch["3"] = "Decline"
+                branch["3"] = target_label
             elif '0' in label or 'call back' in label:
-                branch["0"] = "Qualified No"
+                branch["0"] = target_label
         
         if branch:
             ivr_node["branch"] = branch
         
         ivr_node["maxLoop"] = ["Loop-A", 3, "Problems"]
+
+    def _add_sleep_logic_with_mapping(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]):
+        """Add sleep/wait logic following allflows patterns with proper label mapping"""
+        ivr_node["getDigits"] = {
+            "numDigits": 1,
+            "maxTime": 30,  # 30-second timeout
+            "validChoices": "1|2|3|4|5|6|7|8|9|0|*|#",
+            "errorPrompt": "callflow:1009",
+            "nonePrompt": "callflow:1009"
+        }
+        
+        # Default behavior for any key press
+        if connections:
+            target_id = connections[0]['target']
+            target_label = node_id_to_label.get(target_id, target_id)
+            ivr_node["branch"] = {"default": target_label}
+        else:
+            ivr_node["goto"] = "Live Answer"
+
+    def _add_decision_logic_with_mapping(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]):
+        """Add decision logic for multiple choice nodes with proper label mapping"""
+        ivr_node["getDigits"] = {
+            "numDigits": 1,
+            "maxTries": 3,
+            "maxTime": 7,
+            "validChoices": "",
+            "errorPrompt": "callflow:1009",
+            "nonePrompt": "callflow:1009"
+        }
+        
+        branch = {}
+        valid_choices = []
+        
+        for conn in connections:
+            digit_match = re.search(r'(\d+)', conn['label'])
+            if digit_match:
+                digit = digit_match.group(1)
+                target_id = conn['target']
+                target_label = node_id_to_label.get(target_id, target_id)
+                branch[digit] = target_label
+                valid_choices.append(digit)
+        
+        if branch:
+            ivr_node["branch"] = branch
+            ivr_node["getDigits"]["validChoices"] = "|".join(valid_choices)
+        
+        ivr_node["maxLoop"] = ["Loop-B", 3, "Problems"]
 
     def _add_response_logic(self, ivr_node: Dict[str, Any], label: str, notes: List[str]):
         """Add response handler logic following allflows patterns"""
@@ -701,61 +825,16 @@ class DatabaseDrivenIVRConverter:
         # Always go to Goodbye after response
         ivr_node["goto"] = "Goodbye"
 
-    def _add_sleep_logic(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], notes: List[str]):
-        """Add sleep/wait logic following allflows patterns"""
-        ivr_node["getDigits"] = {
-            "numDigits": 1,
-            "maxTime": 30,  # 30-second timeout
-            "validChoices": "1|2|3|4|5|6|7|8|9|0|*|#",
-            "errorPrompt": "callflow:1009",
-            "nonePrompt": "callflow:1009"
-        }
-        
-        # Default behavior for any key press
-        if connections:
-            target_label = self._map_connection_to_label(connections[0])
-            ivr_node["branch"] = {"default": target_label}
-        else:
-            ivr_node["goto"] = "Live Answer"
-
-    def _add_decision_logic(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], notes: List[str]):
-        """Add decision logic for multiple choice nodes"""
-        ivr_node["getDigits"] = {
-            "numDigits": 1,
-            "maxTries": 3,
-            "maxTime": 7,
-            "validChoices": "",
-            "errorPrompt": "callflow:1009",
-            "nonePrompt": "callflow:1009"
-        }
-        
-        branch = {}
-        valid_choices = []
-        
-        for conn in connections:
-            digit_match = re.search(r'(\\d+)', conn['label'])
-            if digit_match:
-                digit = digit_match.group(1)
-                target_label = self._map_connection_to_label(conn)
-                branch[digit] = target_label
-                valid_choices.append(digit)
-        
-        if branch:
-            ivr_node["branch"] = branch
-            ivr_node["getDigits"]["validChoices"] = "|".join(valid_choices)
-        
-        ivr_node["maxLoop"] = ["Loop-B", 3, "Problems"]
-
     def _map_connection_to_label(self, connection: Dict[str, str]) -> str:
         """Map connection to descriptive target label"""
         target_id = connection['target']
         label = connection['label'].lower()
         
-        # Map based on common patterns
+        # Map based on common patterns from the mermaid diagram
         if 'employee' in label or '1' in label:
             return "Enter PIN"
         elif 'not home' in label or '7' in label:
-            return "Not Home"
+            return "Not Home" 
         elif 'more time' in label or '3' in label:
             return "Sleep"
         elif 'repeat' in label or '9' in label:
@@ -764,8 +843,17 @@ class DatabaseDrivenIVRConverter:
             return "Accept"
         elif 'decline' in label:
             return "Decline"
+        elif 'no input' in label:
+            return "Sleep"
+        elif 'retry' in label:
+            return "Live Answer"
+        elif 'yes' in label:
+            return "Available For Callout"
+        elif 'no' in label:
+            return "Invalid Entry"
         else:
-            return target_id.title()
+            # Use target ID as fallback but make it descriptive
+            return target_id if len(target_id) > 1 else f"Node_{target_id}"
 
     def _ensure_standard_handlers(self, ivr_nodes: List[Dict[str, Any]], used_labels: Set[str], notes: List[str]):
         """Ensure standard handler nodes exist"""
