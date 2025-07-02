@@ -11,9 +11,10 @@ from PIL import Image
 import traceback
 
 # Import the enhanced converter
-from mermaid_ivr_converter import convert_mermaid_to_ivr
+from mermaid_ivr_converter import convert_mermaid_to_ivr, format_ivr_output
 from parse_mermaid import MermaidParser
 from openai_converter import process_flow_diagram
+
 
 # Page configuration
 st.set_page_config(
