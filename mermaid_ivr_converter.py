@@ -97,27 +97,58 @@ class EnhancedMermaidIVRConverter:
 
     def convert(self, mermaid_code: str) -> Tuple[List[Dict[str, Any]], List[str]]:
         """Main conversion method"""
+        notes = []
+        
         try:
             # Parse the mermaid diagram
             parsed_nodes, connections = self._parse_mermaid(mermaid_code)
             
+            # Debug: Check if we parsed anything
+            if not parsed_nodes:
+                notes.append("No nodes were parsed from the Mermaid diagram")
+                return self._create_fallback_flow(), notes
+            
+            if not connections:
+                notes.append("No connections were parsed from the Mermaid diagram")
+            
+            notes.append(f"Parsed {len(parsed_nodes)} nodes and {len(connections)} connections")
+            
             # Generate IVR flow
             ivr_nodes = self._generate_ivr_flow(parsed_nodes, connections)
+            
+            # Check if we generated any nodes
+            if not ivr_nodes:
+                notes.append("No IVR nodes were generated")
+                return self._create_fallback_flow(), notes
+            
+            notes.append(f"Generated {len(ivr_nodes)} IVR nodes")
             
             # Convert to dictionary format for JSON serialization
             ivr_dict = [self._node_to_dict(node) for node in ivr_nodes]
             
-            return ivr_dict, []
+            return ivr_dict, notes
             
         except Exception as e:
             # Return error handler if conversion fails
-            error_node = {
-                "label": "Problems",
-                "log": f"Conversion error: {str(e)}",
-                "playPrompt": "callflow:ErrorHandler",
+            notes.append(f"Conversion failed with error: {str(e)}")
+            return self._create_fallback_flow(), notes
+
+    def _create_fallback_flow(self) -> List[Dict[str, Any]]:
+        """Create a basic fallback flow when parsing fails"""
+        return [
+            {
+                "label": "Live Answer",
+                "log": "Welcome message",
+                "playPrompt": "callflow:Welcome",
+                "goto": "Problems"
+            },
+            {
+                "label": "Problems", 
+                "log": "Error handler",
+                "playPrompt": "callflow:ErrorMessage",
                 "goto": "hangup"
             }
-            return [error_node], [f"Conversion failed: {str(e)}"]
+        ]
 
     def _parse_mermaid(self, mermaid_code: str) -> Tuple[Dict[str, ParsedNode], List[Dict[str, str]]]:
         """Parse mermaid code into structured nodes and connections"""
@@ -131,18 +162,64 @@ class EnhancedMermaidIVRConverter:
             if line.startswith('flowchart') or line.startswith('%%'):
                 continue
             
-            # Parse connections
+            # Parse connections (may contain inline node definitions)
             if '-->' in line:
                 conn = self._parse_connection(line)
                 if conn:
                     connections.append(conn)
+                
+                # Also extract any inline node definitions from the connection line
+                inline_nodes = self._extract_inline_nodes(line)
+                for node in inline_nodes:
+                    if node.id not in nodes:
+                        nodes[node.id] = node
             else:
-                # Parse node definitions
+                # Parse standalone node definitions
                 node = self._parse_node_definition(line)
                 if node:
                     nodes[node.id] = node
         
         return nodes, connections
+
+    def _extract_inline_nodes(self, line: str) -> List[ParsedNode]:
+        """Extract node definitions that appear inline in connection lines"""
+        inline_nodes = []
+        
+        # Pattern to find nodes like: A["text"] or B{"text"} in connection lines
+        node_patterns = [
+            r'(\w+)\s*\["([^"]+)"\]',  # A["text"]
+            r'(\w+)\s*\{"([^"]+)"\}',  # A{"text"}
+            r'(\w+)\s*\("([^"]+)"\)',  # A("text")
+        ]
+        
+        for pattern in node_patterns:
+            matches = re.finditer(pattern, line)
+            for match in matches:
+                node_id, text = match.groups()
+                
+                # Clean up text
+                clean_text = re.sub(r'<br\s*/?>', ' ', text).strip()
+                
+                # Determine node type
+                node_type = self._determine_node_type(clean_text)
+                
+                # Generate descriptive label
+                label = self._generate_descriptive_label(clean_text, node_type)
+                
+                # Segment text and detect variables
+                segments, variables = self._segment_and_detect_variables(clean_text)
+                
+                inline_nodes.append(ParsedNode(
+                    id=node_id,
+                    original_text=clean_text,
+                    node_type=node_type,
+                    label=label,
+                    segments=segments,
+                    variables=variables,
+                    connections=[]
+                ))
+        
+        return inline_nodes
 
     def _parse_node_definition(self, line: str) -> Optional[ParsedNode]:
         """Parse individual node definition"""
@@ -185,17 +262,31 @@ class EnhancedMermaidIVRConverter:
 
     def _parse_connection(self, line: str) -> Optional[Dict[str, str]]:
         """Parse connection between nodes"""
-        # Pattern: A -->|"label"| B or A --> B
-        pattern = r'^(\w+)\s*-->\s*(?:\|"([^"]+)"\|\s*)?(\w+)'
-        match = re.match(pattern, line)
+        # Handle multiple connection patterns
+        patterns = [
+            r'^(\w+)\s*-->\s*\|"([^"]+)"\|\s*(\w+)',  # A -->|"label"| B
+            r'^(\w+)\s*-->\s*\|([^|]+)\|\s*(\w+)',    # A -->|label| B  
+            r'^(\w+)\s*-->\s*(\w+)',                  # A --> B
+        ]
         
-        if match:
-            source, label, target = match.groups()
-            return {
-                'source': source.strip(),
-                'target': target.strip(),
-                'label': label.strip() if label else ''
-            }
+        for pattern in patterns:
+            match = re.match(pattern, line)
+            if match:
+                groups = match.groups()
+                if len(groups) == 3:
+                    source, label, target = groups
+                    return {
+                        'source': source.strip(),
+                        'target': target.strip(),
+                        'label': label.strip() if label else ''
+                    }
+                elif len(groups) == 2:
+                    source, target = groups
+                    return {
+                        'source': source.strip(),
+                        'target': target.strip(),
+                        'label': ''
+                    }
         
         return None
 
@@ -213,42 +304,56 @@ class EnhancedMermaidIVRConverter:
     def _generate_descriptive_label(self, text: str, node_type: NodeType) -> str:
         """Generate descriptive label following Andres's conventions"""
         
-        if node_type == NodeType.WELCOME:
+        text_lower = text.lower()
+        
+        # Handle specific patterns from the mermaid code
+        if 'welcome' in text_lower or 'this is an' in text_lower:
             return "Live Answer"
-        elif node_type == NodeType.PIN_ENTRY:
+        elif 'enter' in text_lower and 'pin' in text_lower:
             return "Enter PIN"
-        elif node_type == NodeType.GOODBYE:
+        elif 'employee not home' in text_lower:
+            return "Not Home"
+        elif 'accepted response' in text_lower:
+            return "Accept"
+        elif 'callout decline' in text_lower:
+            return "Decline"
+        elif 'qualified no' in text_lower:
+            return "Qualified No"
+        elif 'goodbye' in text_lower or 'thank you' in text_lower:
             return "Goodbye"
-        elif node_type == NodeType.ERROR:
-            return "Problems"
-        elif node_type == NodeType.SLEEP:
+        elif 'invalid' in text_lower or 'retry' in text_lower:
+            return "Invalid Entry"
+        elif 'correct pin' in text_lower:
+            return "Check PIN"
+        elif 'available' in text_lower and 'callout' in text_lower:
+            return "Available For Callout"
+        elif 'custom message' in text_lower:
+            return "Custom Message"
+        elif 'callout reason' in text_lower:
+            return "Callout Reason"
+        elif 'trouble location' in text_lower:
+            return "Trouble Location"
+        elif 'disconnect' in text_lower:
+            return "Disconnect"
+        elif '30-second message' in text_lower or 'press any key' in text_lower:
             return "Sleep"
+        elif node_type == NodeType.ERROR or 'problem' in text_lower:
+            return "Problems"
         elif node_type == NodeType.DECISION:
-            # Extract key decision words
-            if re.search(r'available.*work.*callout', text.lower()):
-                return "Available For Callout"
-            elif re.search(r'correct.*pin', text.lower()):
-                return "Check PIN"
-            elif re.search(r'this\s+is.*employee', text.lower()):
-                return "Employee Verification"
+            # Extract key decision words for unknown decision points
+            if re.search(r'press\s+\d+', text_lower):
+                return "User Input"
             else:
                 return "Decision Point"
-        elif node_type == NodeType.RESPONSE:
-            if re.search(r'accept', text.lower()):
-                return "Accept"
-            elif re.search(r'decline', text.lower()):
-                return "Decline"
-            elif re.search(r'not\s+home', text.lower()):
-                return "Not Home"
-            elif re.search(r'qualified.*no', text.lower()):
-                return "Qualified No"
-            else:
-                return "Response Handler"
         else:
-            # Generate label from key words in text
-            words = re.findall(r'\w+', text)
-            key_words = [w for w in words[:3] if len(w) > 2]
-            return ' '.join(key_words[:2]).title() if key_words else "Action"
+            # Generate label from first meaningful words
+            words = re.findall(r'\b[a-zA-Z]+\b', text)
+            meaningful_words = [w for w in words[:4] if len(w) > 2 and w.lower() not in ['the', 'and', 'for', 'are', 'you', 'this', 'that']]
+            
+            if meaningful_words:
+                return ' '.join(meaningful_words[:2]).title()
+            else:
+                return "Action"
 
     def _segment_and_detect_variables(self, text: str) -> Tuple[List[str], Dict[str, str]]:
         """Segment text and detect variables following Andres's patterns"""
@@ -327,10 +432,21 @@ class EnhancedMermaidIVRConverter:
         incoming = {conn['target'] for conn in connections}
         start_nodes = [node_id for node_id in nodes.keys() if node_id not in incoming]
         
-        # Process nodes in order, starting with start nodes
+        # If no clear start node, use the first node alphabetically
+        if not start_nodes and nodes:
+            start_nodes = [sorted(nodes.keys())[0]]
+        
+        # Process all nodes, starting with start nodes
         processed = set()
+        
+        # First, process start nodes and their descendants
         for start_node in start_nodes:
             self._process_node_recursive(start_node, nodes, conn_map, ivr_nodes, processed)
+        
+        # Then process any remaining unprocessed nodes (in case of disconnected subgraphs)
+        for node_id in nodes.keys():
+            if node_id not in processed:
+                self._process_node_recursive(node_id, nodes, conn_map, ivr_nodes, processed)
         
         # Add standard error handler if not present
         if not any(node.label == "Problems" for node in ivr_nodes):
@@ -349,12 +465,14 @@ class EnhancedMermaidIVRConverter:
         node = nodes[node_id]
         
         # Create IVR node based on type
-        ivr_node = self._create_ivr_node(node, conn_map.get(node_id, []))
+        node_connections = conn_map.get(node_id, [])
+        ivr_node = self._create_ivr_node(node, node_connections)
         ivr_nodes.append(ivr_node)
         
         # Process connected nodes
-        for conn in conn_map.get(node_id, []):
-            self._process_node_recursive(conn['target'], nodes, conn_map, ivr_nodes, processed)
+        for conn in node_connections:
+            if conn['target'] in nodes:  # Only process if target node exists
+                self._process_node_recursive(conn['target'], nodes, conn_map, ivr_nodes, processed)
 
     def _create_ivr_node(self, node: ParsedNode, connections: List[Dict[str, str]]) -> IVRNode:
         """Create IVR node following Andres's patterns"""
@@ -408,37 +526,57 @@ class EnhancedMermaidIVRConverter:
         
         for conn in connections:
             label = conn['label'].lower()
-            if re.search(r'\b1\b', label):
+            target = conn['target']
+            
+            # Look for specific digit patterns
+            if re.search(r'\b1\b', label) or 'accept' in label:
                 valid_choices.append('1')
-                branch_map['1'] = conn['target']
+                branch_map['1'] = target
             elif re.search(r'\b2\b', label):
                 valid_choices.append('2')
-                branch_map['2'] = conn['target']
-            elif re.search(r'\b3\b', label):
+                branch_map['2'] = target
+            elif re.search(r'\b3\b', label) or 'decline' in label or 'need more time' in label:
                 valid_choices.append('3')
-                branch_map['3'] = conn['target']
-            elif re.search(r'\b7\b', label):
+                branch_map['3'] = target
+            elif re.search(r'\b7\b', label) or 'not home' in label:
                 valid_choices.append('7')
-                branch_map['7'] = conn['target']
-            elif re.search(r'\b9\b', label):
+                branch_map['7'] = target
+            elif re.search(r'\b9\b', label) or 'repeat' in label or 'retry' in label:
                 valid_choices.append('9')
-                branch_map['9'] = conn['target']
-            elif 'no input' in label or 'timeout' in label:
-                branch_map['none'] = conn['target']
+                branch_map['9'] = target
+            elif 'no input' in label or 'timeout' in label or 'go to pg' in label:
+                branch_map['none'] = target
             elif 'error' in label or 'invalid' in label:
-                branch_map['error'] = conn['target']
+                branch_map['error'] = target
+            elif 'yes' in label and '1' not in branch_map:
+                valid_choices.append('1')
+                branch_map['1'] = target
+            elif 'no' in label and '2' not in branch_map:
+                valid_choices.append('2')
+                branch_map['2'] = target
+            else:
+                # If no specific pattern, try to extract any digit
+                digit_match = re.search(r'\b(\d)\b', label)
+                if digit_match:
+                    digit = digit_match.group(1)
+                    valid_choices.append(digit)
+                    branch_map[digit] = target
         
-        # Set default error handling
+        # Set default error handling if not specified
         if 'error' not in branch_map:
             branch_map['error'] = 'Problems'
         if 'none' not in branch_map:
             branch_map['none'] = 'Problems'
         
+        # Default valid choices if none detected
+        if not valid_choices:
+            valid_choices = ['1', '3', '7', '9']
+        
         ivr_node.getDigits = {
             "numDigits": 1,
             "maxTries": 3,
             "maxTime": 7,
-            "validChoices": "|".join(sorted(valid_choices)) if valid_choices else "1|3|7|9",
+            "validChoices": "|".join(sorted(set(valid_choices))),
             "errorPrompt": "callflow:InvalidInput",
             "nonePrompt": "callflow:NoInput"
         }
