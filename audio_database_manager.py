@@ -1,15 +1,15 @@
 """
-Audio Database Manager for IVR Code Generation
-Handles loading, indexing, and searching the audio transcription database
-Following Andres's manual process for exact audio file mapping
+Updated Audio Database Manager with Enhanced File Handling
+Supports both file paths and file-like objects for CSV upload functionality
 """
 
 import pandas as pd
 import re
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple, Union
 from dataclasses import dataclass
 from pathlib import Path
 import logging
+import io
 
 @dataclass
 class AudioRecord:
@@ -23,25 +23,40 @@ class AudioRecord:
 
 class AudioDatabaseManager:
     """
-    Manages the audio transcription database and provides search functionality
-    Implements Andres's manual search process programmatically
+    Enhanced Audio Database Manager that supports file uploads
+    Handles loading, indexing, and searching the audio transcription database
     """
     
-    def __init__(self, csv_path: str = None):
+    def __init__(self, csv_source: Union[str, io.StringIO, pd.DataFrame] = None):
         self.audio_records: List[AudioRecord] = []
         self.transcript_index: Dict[str, List[AudioRecord]] = {}
         self.company_index: Dict[str, Dict[str, List[AudioRecord]]] = {}
         self.folder_index: Dict[str, List[AudioRecord]] = {}
         self.logger = logging.getLogger(__name__)
         
-        if csv_path:
-            self.load_database(csv_path)
+        if csv_source is not None:
+            self.load_database(csv_source)
     
-    def load_database(self, csv_path: str) -> None:
-        """Load and index the audio database from CSV"""
+    def load_database(self, csv_source: Union[str, io.StringIO, pd.DataFrame]) -> None:
+        """
+        Load and index the audio database from various sources
+        
+        Args:
+            csv_source: Can be file path, StringIO object, or DataFrame
+        """
         try:
-            df = pd.read_csv(csv_path)
-            self.logger.info(f"Loading audio database from {csv_path}")
+            self.logger.info(f"Loading audio database from {type(csv_source)}")
+            
+            # Handle different input types
+            if isinstance(csv_source, pd.DataFrame):
+                df = csv_source
+            elif isinstance(csv_source, (str, Path)):
+                df = pd.read_csv(csv_source)
+            elif hasattr(csv_source, 'read'):
+                # File-like object (StringIO, uploaded file, etc.)
+                df = pd.read_csv(csv_source)
+            else:
+                raise ValueError(f"Unsupported csv_source type: {type(csv_source)}")
             
             # Validate required columns
             required_cols = ['Company', 'Folder', 'File Name', 'Transcript']
@@ -49,21 +64,45 @@ class AudioDatabaseManager:
             if missing_cols:
                 raise ValueError(f"Missing required columns: {missing_cols}")
             
+            # Clear existing data
+            self.audio_records = []
+            self.transcript_index = {}
+            self.company_index = {}
+            self.folder_index = {}
+            
             # Process each record
+            processed_count = 0
             for _, row in df.iterrows():
                 try:
                     audio_record = self._create_audio_record(row)
                     if audio_record:
                         self.audio_records.append(audio_record)
+                        processed_count += 1
                 except Exception as e:
                     self.logger.warning(f"Failed to process row: {row.to_dict()}, Error: {e}")
             
             # Build indexes for fast searching
             self._build_indexes()
-            self.logger.info(f"Loaded {len(self.audio_records)} audio records")
+            self.logger.info(f"Loaded {processed_count} audio records from {len(df)} rows")
             
         except Exception as e:
             self.logger.error(f"Failed to load database: {e}")
+            raise
+    
+    def load_from_uploaded_file(self, uploaded_file) -> None:
+        """
+        Convenience method to load from Streamlit uploaded file
+        
+        Args:
+            uploaded_file: Streamlit UploadedFile object
+        """
+        try:
+            # Convert uploaded file to StringIO
+            content = uploaded_file.getvalue().decode('utf-8')
+            csv_io = io.StringIO(content)
+            self.load_database(csv_io)
+        except Exception as e:
+            self.logger.error(f"Failed to load from uploaded file: {e}")
             raise
     
     def _create_audio_record(self, row: pd.Series) -> Optional[AudioRecord]:
@@ -183,6 +222,45 @@ class AudioDatabaseManager:
         
         return []
     
+    def search_partial_match(self, text: str, company: str = None, min_score: float = 0.8) -> List[Tuple[AudioRecord, float]]:
+        """
+        Search for partial text matches with similarity scoring
+        Useful for finding close matches when exact match fails
+        """
+        normalized_text = self._normalize_text(text)
+        if not normalized_text:
+            return []
+        
+        matches = []
+        search_records = self.audio_records
+        
+        # Filter by company if provided
+        if company:
+            search_records = [r for r in self.audio_records if r.company == company.lower()]
+        
+        for record in search_records:
+            normalized_transcript = self._normalize_text(record.transcript)
+            
+            # Simple similarity scoring (can be enhanced with more sophisticated algorithms)
+            if normalized_text in normalized_transcript:
+                score = len(normalized_text) / len(normalized_transcript)
+            elif normalized_transcript in normalized_text:
+                score = len(normalized_transcript) / len(normalized_text)
+            else:
+                # Calculate word overlap
+                text_words = set(normalized_text.split())
+                transcript_words = set(normalized_transcript.split())
+                overlap = len(text_words.intersection(transcript_words))
+                total_words = len(text_words.union(transcript_words))
+                score = overlap / total_words if total_words > 0 else 0
+            
+            if score >= min_score:
+                matches.append((record, score))
+        
+        # Sort by score descending
+        matches.sort(key=lambda x: x[1], reverse=True)
+        return matches
+    
     def get_companies(self) -> List[str]:
         """Get list of all companies in database"""
         return list(self.company_index.keys())
@@ -206,6 +284,27 @@ class AudioDatabaseManager:
             all_records.extend(transcript_records)
         return all_records
     
+    def get_sample_records(self, count: int = 10, company: str = None) -> List[AudioRecord]:
+        """Get sample records for preview"""
+        if company:
+            records = self.get_records_by_company(company)
+        else:
+            records = self.audio_records
+        
+        return records[:count]
+    
+    def export_to_dataframe(self) -> pd.DataFrame:
+        """Export audio records back to DataFrame format"""
+        data = []
+        for record in self.audio_records:
+            data.append({
+                'Company': record.company,
+                'Folder': record.folder,
+                'File Name': record.file_name,
+                'Transcript': record.transcript
+            })
+        return pd.DataFrame(data)
+    
     def stats(self) -> Dict[str, int]:
         """Get database statistics"""
         return {
@@ -213,4 +312,35 @@ class AudioDatabaseManager:
             'unique_transcripts': len(self.transcript_index),
             'companies': len(self.company_index),
             'folders': len(self.folder_index)
+        }
+    
+    def validate_database(self) -> Dict[str, Any]:
+        """Validate database integrity and return report"""
+        issues = []
+        warnings = []
+        
+        # Check for duplicate audio IDs within same company/folder
+        id_combinations = {}
+        for record in self.audio_records:
+            key = (record.company, record.folder, record.audio_id)
+            if key in id_combinations:
+                issues.append(f"Duplicate audio ID: {key}")
+            else:
+                id_combinations[key] = record
+        
+        # Check for empty transcripts
+        empty_transcripts = [r for r in self.audio_records if not r.transcript.strip()]
+        if empty_transcripts:
+            warnings.append(f"Found {len(empty_transcripts)} records with empty transcripts")
+        
+        # Check for unusual file naming patterns
+        unusual_files = [r for r in self.audio_records if not re.search(r'\d+', r.file_name)]
+        if unusual_files:
+            warnings.append(f"Found {len(unusual_files)} files without numeric IDs")
+        
+        return {
+            'valid': len(issues) == 0,
+            'issues': issues,
+            'warnings': warnings,
+            'stats': self.stats()
         }
