@@ -5,7 +5,7 @@ Supports both file paths and file-like objects for CSV upload functionality
 
 import pandas as pd
 import re
-from typing import Dict, List, Optional, Set, Tuple, Union
+from typing import Dict, List, Optional, Set, Tuple, Union, Any  # Added Any here
 from dataclasses import dataclass
 from pathlib import Path
 import logging
@@ -138,172 +138,127 @@ class AudioDatabaseManager:
             )
             
         except Exception as e:
-            self.logger.error(f"Error creating audio record: {e}")
+            self.logger.error(f"Failed to create audio record: {e}")
             return None
     
     def _build_indexes(self) -> None:
-        """Build search indexes for efficient lookup"""
-        self.transcript_index = {}
-        self.company_index = {}
-        self.folder_index = {}
-        
+        """Build search indexes for efficient lookups"""
         for record in self.audio_records:
-            # Transcript index (exact match)
-            transcript_key = self._normalize_text(record.transcript)
-            if transcript_key not in self.transcript_index:
-                self.transcript_index[transcript_key] = []
-            self.transcript_index[transcript_key].append(record)
+            # Index by normalized transcript
+            normalized = self._normalize_text(record.transcript)
             
-            # Company index
+            # Add to transcript index
+            if normalized not in self.transcript_index:
+                self.transcript_index[normalized] = []
+            self.transcript_index[normalized].append(record)
+            
+            # Add to company index
             if record.company not in self.company_index:
                 self.company_index[record.company] = {}
-            company_dict = self.company_index[record.company]
+            if normalized not in self.company_index[record.company]:
+                self.company_index[record.company][normalized] = []
+            self.company_index[record.company][normalized].append(record)
             
-            if transcript_key not in company_dict:
-                company_dict[transcript_key] = []
-            company_dict[transcript_key].append(record)
-            
-            # Folder index
+            # Add to folder index
             if record.folder not in self.folder_index:
                 self.folder_index[record.folder] = []
             self.folder_index[record.folder].append(record)
     
     def _normalize_text(self, text: str) -> str:
-        """Normalize text for consistent matching"""
-        if not text:
-            return ""
-        
-        # Remove extra whitespace and convert to lowercase
-        normalized = re.sub(r'\s+', ' ', text.strip().lower())
-        
-        # Remove punctuation at the end but keep internal punctuation
-        normalized = re.sub(r'[.!?;]+$', '', normalized)
-        
-        return normalized
+        """Normalize text for matching (lowercase, strip, remove extra spaces)"""
+        return ' '.join(text.lower().strip().split())
     
-    def search_exact_match(self, text: str, company: str = None, schema: str = None) -> List[AudioRecord]:
+    def find_exact_match(self, text: str, company: Optional[str] = None, folder: Optional[str] = None) -> Optional[AudioRecord]:
         """
-        Search for exact text match following hierarchy: Schema → Company → Global
-        This implements Andres's search process
+        Find exact match for the given text
+        
+        Args:
+            text: Text to search for
+            company: Company context (None = search all)
+            folder: Folder context (None = search all)
+            
+        Returns:
+            AudioRecord if found, None otherwise
         """
-        normalized_text = self._normalize_text(text)
+        normalized = self._normalize_text(text)
         
-        if not normalized_text:
-            return []
-        
-        # Search hierarchy: Schema → Company → Global
-        search_contexts = []
-        
-        # 1. Schema-specific (if provided)
-        if schema:
-            search_contexts.append(f"schema_{schema.lower()}")
-        
-        # 2. Company-specific (if provided)
         if company:
-            search_contexts.append(company.lower())
+            # Search within specific company
+            if company in self.company_index and normalized in self.company_index[company]:
+                records = self.company_index[company][normalized]
+                
+                # Filter by folder if specified
+                if folder:
+                    records = [r for r in records if r.folder == folder]
+                
+                return records[0] if records else None
+        else:
+            # Search across all companies
+            if normalized in self.transcript_index:
+                records = self.transcript_index[normalized]
+                
+                # Filter by folder if specified
+                if folder:
+                    records = [r for r in records if r.folder == folder]
+                
+                return records[0] if records else None
         
-        # 3. Global (arcos)
-        search_contexts.append("arcos")
-        
-        # Search in hierarchy order
-        for context in search_contexts:
-            if context in self.company_index:
-                company_records = self.company_index[context]
-                if normalized_text in company_records:
-                    results = company_records[normalized_text]
-                    self.logger.debug(f"Found exact match in {context}: {text} -> {[r.full_path for r in results]}")
-                    return results
-        
-        # If no company-specific match, search global index
-        if normalized_text in self.transcript_index:
-            results = self.transcript_index[normalized_text]
-            self.logger.debug(f"Found exact match globally: {text} -> {[r.full_path for r in results]}")
-            return results
-        
-        return []
+        return None
     
-    def search_partial_match(self, text: str, company: str = None, min_score: float = 0.8) -> List[Tuple[AudioRecord, float]]:
-        """
-        Search for partial text matches with similarity scoring
-        Useful for finding close matches when exact match fails
-        """
-        normalized_text = self._normalize_text(text)
-        if not normalized_text:
-            return []
+    def find_by_prefix(self, prefix: str, company: Optional[str] = None, folder: Optional[str] = None) -> List[AudioRecord]:
+        """Find all records that start with the given prefix"""
+        normalized_prefix = self._normalize_text(prefix)
+        results = []
         
-        matches = []
-        search_records = self.audio_records
+        # Determine which records to search
+        search_records = []
+        if company and company in self.company_index:
+            for transcript_records in self.company_index[company].values():
+                search_records.extend(transcript_records)
+        else:
+            search_records = self.audio_records
         
-        # Filter by company if provided
-        if company:
-            search_records = [r for r in self.audio_records if r.company == company.lower()]
-        
+        # Filter by prefix and folder
         for record in search_records:
             normalized_transcript = self._normalize_text(record.transcript)
-            
-            # Simple similarity scoring (can be enhanced with more sophisticated algorithms)
-            if normalized_text in normalized_transcript:
-                score = len(normalized_text) / len(normalized_transcript)
-            elif normalized_transcript in normalized_text:
-                score = len(normalized_transcript) / len(normalized_text)
-            else:
-                # Calculate word overlap
-                text_words = set(normalized_text.split())
-                transcript_words = set(normalized_transcript.split())
-                overlap = len(text_words.intersection(transcript_words))
-                total_words = len(text_words.union(transcript_words))
-                score = overlap / total_words if total_words > 0 else 0
-            
-            if score >= min_score:
-                matches.append((record, score))
+            if normalized_transcript.startswith(normalized_prefix):
+                if not folder or record.folder == folder:
+                    results.append(record)
         
-        # Sort by score descending
-        matches.sort(key=lambda x: x[1], reverse=True)
-        return matches
+        return results
+    
+    def find_by_substring(self, substring: str, company: Optional[str] = None, folder: Optional[str] = None) -> List[AudioRecord]:
+        """Find all records containing the substring"""
+        normalized_substring = self._normalize_text(substring)
+        results = []
+        
+        # Determine which records to search
+        search_records = []
+        if company and company in self.company_index:
+            for transcript_records in self.company_index[company].values():
+                search_records.extend(transcript_records)
+        else:
+            search_records = self.audio_records
+        
+        # Filter by substring and folder
+        seen = set()  # Avoid duplicates
+        for record in search_records:
+            if record.full_path not in seen:
+                normalized_transcript = self._normalize_text(record.transcript)
+                if normalized_substring in normalized_transcript:
+                    if not folder or record.folder == folder:
+                        results.append(record)
+                        seen.add(record.full_path)
+        
+        return results
     
     def get_companies(self) -> List[str]:
-        """Get list of all companies in database"""
-        return list(self.company_index.keys())
+        """Get list of all companies in the database"""
+        return sorted(list(self.company_index.keys()))
     
     def get_folders(self) -> List[str]:
-        """Get list of all folders in database"""
-        return list(self.folder_index.keys())
-    
-    def get_records_by_folder(self, folder: str) -> List[AudioRecord]:
-        """Get all records for a specific folder"""
-        return self.folder_index.get(folder, [])
-    
-    def get_records_by_company(self, company: str) -> List[AudioRecord]:
-        """Get all records for a specific company"""
-        company_lower = company.lower()
-        if company_lower not in self.company_index:
-            return []
-        
-        all_records = []
-        for transcript_records in self.company_index[company_lower].values():
-            all_records.extend(transcript_records)
-        return all_records
-    
-    def get_sample_records(self, count: int = 10, company: str = None) -> List[AudioRecord]:
-        """Get sample records for preview"""
-        if company:
-            records = self.get_records_by_company(company)
-        else:
-            records = self.audio_records
-        
-        return records[:count]
-    
-    def export_to_dataframe(self) -> pd.DataFrame:
-        """Export audio records back to DataFrame format"""
-        data = []
-        for record in self.audio_records:
-            data.append({
-                'Company': record.company,
-                'Folder': record.folder,
-                'File Name': record.file_name,
-                'Transcript': record.transcript
-            })
-        return pd.DataFrame(data)
+        """Get list of all folders in the database"""
+        return sorted(list(self.folder_index.keys()))
     
     def stats(self) -> Dict[str, int]:
         """Get database statistics"""
@@ -314,29 +269,29 @@ class AudioDatabaseManager:
             'folders': len(self.folder_index)
         }
     
-    def validate_database(self) -> Dict[str, Any]:
+    def validate_database(self) -> Dict[str, Any]:  # Any is now imported!
         """Validate database integrity and return report"""
         issues = []
         warnings = []
         
-        # Check for duplicate audio IDs within same company/folder
-        id_combinations = {}
+        # Check for duplicates
+        seen_paths = {}
         for record in self.audio_records:
-            key = (record.company, record.folder, record.audio_id)
-            if key in id_combinations:
-                issues.append(f"Duplicate audio ID: {key}")
+            if record.full_path in seen_paths:
+                issues.append(f"Duplicate path found: {record.full_path} in companies: {seen_paths[record.full_path]}, {record.company}")
             else:
-                id_combinations[key] = record
+                seen_paths[record.full_path] = record.company
         
         # Check for empty transcripts
-        empty_transcripts = [r for r in self.audio_records if not r.transcript.strip()]
-        if empty_transcripts:
-            warnings.append(f"Found {len(empty_transcripts)} records with empty transcripts")
+        empty_count = sum(1 for r in self.audio_records if not r.transcript)
+        if empty_count > 0:
+            warnings.append(f"{empty_count} records have empty transcripts")
         
-        # Check for unusual file naming patterns
-        unusual_files = [r for r in self.audio_records if not re.search(r'\d+', r.file_name)]
-        if unusual_files:
-            warnings.append(f"Found {len(unusual_files)} files without numeric IDs")
+        # Check for common folders
+        expected_folders = ['callflow', 'type', 'reason', 'location', 'names', 'digits']
+        missing_folders = [f for f in expected_folders if f not in self.folder_index]
+        if missing_folders:
+            warnings.append(f"Missing expected folders: {missing_folders}")
         
         return {
             'valid': len(issues) == 0,
@@ -344,3 +299,16 @@ class AudioDatabaseManager:
             'warnings': warnings,
             'stats': self.stats()
         }
+
+# Example usage for testing
+if __name__ == "__main__":
+    # Test with sample data
+    test_data = pd.DataFrame([
+        {"Company": "aep", "Folder": "callflow", "File Name": "1191.ulaw", "Transcript": "This is an"},
+        {"Company": "aep", "Folder": "callflow", "File Name": "1274.ulaw", "Transcript": "callout from"},
+        {"Company": "aep", "Folder": "type", "File Name": "1001.ulaw", "Transcript": "electric"},
+    ])
+    
+    manager = AudioDatabaseManager(test_data)
+    print(manager.stats())
+    print(manager.validate_database())
