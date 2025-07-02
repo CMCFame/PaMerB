@@ -1,4 +1,4 @@
-""""""
+"""
 Complete Database-Driven Mermaid to IVR Converter
 Uses cf_general_structure.csv to map text to actual voice files
 Generates production-ready IVR code with real callflow IDs
@@ -8,6 +8,7 @@ Automates Andres's manual voice file search process
 import re
 import csv
 import io
+import json
 from typing import List, Dict, Any, Optional, Tuple, Set
 from dataclasses import dataclass
 from enum import Enum
@@ -81,9 +82,6 @@ class DatabaseDrivenIVRConverter:
     def _load_voice_database(self):
         """Load and index the complete voice file database from CSV"""
         try:
-            # Try to load the actual CSV file uploaded to the app
-            # If not available, create comprehensive mappings from analysis
-            
             # Load essential voice files from CSV analysis and allflows examples
             voice_data = [
                 # Core callflow files from allflows examples
@@ -145,18 +143,6 @@ class DatabaseDrivenIVRConverter:
                 ("aep", "callout_type", "1025.ulaw", "Notification."),
                 ("aep", "callout_type", "1027.ulaw", "911 emergency."),
                 ("aep", "callout_type", "1110.ulaw", "Planned overtime."),
-                
-                # Segmentation helpers (common word connectors)
-                ("arcos", "callflow", "1590.ulaw", "and"),
-                ("arcos", "callflow", "1591.ulaw", "the"),
-                ("arcos", "callflow", "1592.ulaw", "for"),
-                ("arcos", "callflow", "1593.ulaw", "with"),
-                ("arcos", "callflow", "1594.ulaw", "on"),
-                ("arcos", "callflow", "1595.ulaw", "in"),
-                ("arcos", "callflow", "1596.ulaw", "of"),
-                ("arcos", "callflow", "1597.ulaw", "to"),
-                ("arcos", "callflow", "1598.ulaw", "a"),
-                ("arcos", "callflow", "1599.ulaw", "an"),
             ]
             
             # Convert to VoiceFile objects
@@ -233,8 +219,7 @@ class DatabaseDrivenIVRConverter:
         if not best_match:
             for voice_file in self.voice_files:
                 transcript_clean = voice_file.transcript.lower().strip()
-                if (len(text_clean) > 3 and text_clean in transcript_clean) or \
-                   (len(transcript_clean) > 3 and transcript_clean in text_clean):
+                if (len(text_clean) > 3 and text_clean in transcript_clean) or (len(transcript_clean) > 3 and transcript_clean in text_clean):
                     best_match = voice_file
                     break
         
@@ -348,7 +333,7 @@ class DatabaseDrivenIVRConverter:
 
     def _generate_fallback_id(self, text: str) -> str:
         """Generate fallback callflow ID when no database match is found"""
-        words = re.findall(r'\\w+', text.lower())
+        words = re.findall(r'\w+', text.lower())
         if words:
             return ''.join(word.capitalize() for word in words[:2])
         else:
@@ -540,7 +525,7 @@ class DatabaseDrivenIVRConverter:
         # Fallback to meaningful name
         else:
             # Extract key words for label
-            words = re.findall(r'\\b[A-Z][a-z]+', text)
+            words = re.findall(r'\b[A-Z][a-z]+', text)
             if words:
                 return ' '.join(words[:2])
             else:
@@ -625,50 +610,6 @@ class DatabaseDrivenIVRConverter:
         elif connections and len(connections) == 1:
             target_id = connections[0]['target']
             target_label = node_id_to_label.get(target_id, target_id)
-            ivr_node["goto"] = target_label
-        
-        return [ivr_node]
-
-    def _create_database_node(self, node: Dict[str, Any], label: str, connections: List[Dict[str, str]], notes: List[str]) -> List[Dict[str, Any]]:
-        """Create IVR node(s) using database matching"""
-        text = node['text']
-        node_type = node.get('type', NodeType.ACTION)
-        
-        # Intelligent segmentation using database
-        segments, variables = self._intelligent_segmentation(text)
-        play_log, play_prompt = self._generate_database_prompts(segments, variables, notes)
-        
-        # Create base node following allflows property order
-        ivr_node = {}
-        
-        # Property order: label → playLog → playPrompt → getDigits → branch → maxLoop → gosub → goto → nobarge
-        ivr_node["label"] = label
-        
-        if len(play_log) > 1:
-            ivr_node["playLog"] = play_log
-        elif play_log:
-            ivr_node["playLog"] = play_log[0]
-        
-        if len(play_prompt) > 1:
-            ivr_node["playPrompt"] = play_prompt
-        elif play_prompt:
-            ivr_node["playPrompt"] = play_prompt[0]
-        
-        # Add interaction logic based on node type and connections
-        if node_type == NodeType.WELCOME and connections:
-            self._add_welcome_logic(ivr_node, connections, notes)
-        elif node_type == NodeType.PIN_ENTRY:
-            self._add_pin_logic(ivr_node, connections, notes)
-        elif node_type == NodeType.AVAILABILITY and connections:
-            self._add_availability_logic(ivr_node, connections, notes)
-        elif node_type == NodeType.RESPONSE:
-            self._add_response_logic(ivr_node, label, notes)
-        elif node_type == NodeType.SLEEP:
-            self._add_sleep_logic(ivr_node, connections, notes)
-        elif connections and len(connections) > 1:
-            self._add_decision_logic(ivr_node, connections, notes)
-        elif connections and len(connections) == 1:
-            target_label = self._map_connection_to_label(connections[0])
             ivr_node["goto"] = target_label
         
         return [ivr_node]
@@ -825,36 +766,6 @@ class DatabaseDrivenIVRConverter:
         # Always go to Goodbye after response
         ivr_node["goto"] = "Goodbye"
 
-    def _map_connection_to_label(self, connection: Dict[str, str]) -> str:
-        """Map connection to descriptive target label"""
-        target_id = connection['target']
-        label = connection['label'].lower()
-        
-        # Map based on common patterns from the mermaid diagram
-        if 'employee' in label or '1' in label:
-            return "Enter PIN"
-        elif 'not home' in label or '7' in label:
-            return "Not Home" 
-        elif 'more time' in label or '3' in label:
-            return "Sleep"
-        elif 'repeat' in label or '9' in label:
-            return "Live Answer"
-        elif 'accept' in label:
-            return "Accept"
-        elif 'decline' in label:
-            return "Decline"
-        elif 'no input' in label:
-            return "Sleep"
-        elif 'retry' in label:
-            return "Live Answer"
-        elif 'yes' in label:
-            return "Available For Callout"
-        elif 'no' in label:
-            return "Invalid Entry"
-        else:
-            # Use target ID as fallback but make it descriptive
-            return target_id if len(target_id) > 1 else f"Node_{target_id}"
-
     def _ensure_standard_handlers(self, ivr_nodes: List[Dict[str, Any]], used_labels: Set[str], notes: List[str]):
         """Ensure standard handler nodes exist"""
         existing_labels = {node.get('label') for node in ivr_nodes}
@@ -907,15 +818,9 @@ def convert_mermaid_to_ivr(mermaid_code: str) -> Tuple[List[Dict[str, Any]], Lis
     """Main conversion function using sophisticated database-driven approach"""
     converter = DatabaseDrivenIVRConverter()
     return converter.convert(mermaid_code)
-    
-"""
-Format IVR Output Function for the enhanced converter
-Converts IVR node list to proper JavaScript module.exports format
-"""
 
-import json
-from typing import List, Dict, Any
 
+# Format IVR Output Functions
 def format_ivr_output(ivr_nodes: List[Dict[str, Any]]) -> str:
     """
     Format IVR nodes into production-ready JavaScript module.exports format
