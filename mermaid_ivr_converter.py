@@ -472,68 +472,95 @@ class DatabaseDrivenIVRConverter:
             return self._create_fallback_flow(), notes
 
     def _parse_mermaid(self, mermaid_code: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, str]]]:
-        """Parse mermaid code into nodes and connections with enhanced text extraction"""
-        lines = [line.strip() for line in mermaid_code.split('\n') if line.strip()]
-        
-        nodes = []
-        connections = []
-        node_texts = {}
-        
-        # First pass: Extract standalone node definitions
-        for line in lines:
-            if line.startswith('flowchart') or line.startswith('%%') or '-->' in line:
-                continue
-                
-            # Look for standalone node definitions like A["text"]
-            if '"' in line:
-                quote_start = line.find('"')
-                quote_end = line.rfind('"')
-                if quote_start != -1 and quote_end != -1 and quote_end > quote_start:
-                    # Get node ID (everything before the bracket/quote)
-                    before_bracket = line[:quote_start]
-                    id_match = re.search(r'([A-Z]+)\s*[\[{]?\s*
-        
-        # Second pass: Parse connections and extract inline node definitions
-        for line in lines:
-            if line.startswith('flowchart') or line.startswith('%%'):
-                continue
-                
-            # Parse connections and extract nodes
-            if '-->' in line:
-                try:
-                    # Split the line at --> to separate source and target
-                    arrow_pos = line.find('-->')
-                    source_part = line[:arrow_pos].strip()
-                    target_part = line[arrow_pos + 3:].strip()
-                    
-                    # Enhanced source node extraction
-                    # Handle patterns like: A["complex text with (variables) and <br/> tags"]
-                    source_id = None
-                    if '"' in source_part:
-                        # Extract from quoted definition
-                        quote_start = source_part.find('"')
-                        quote_end = source_part.rfind('"')
-                        if quote_start != -1 and quote_end != -1 and quote_end > quote_start:
-                            # Get node ID (everything before the bracket/quote)
-                            before_bracket = source_part[:quote_start]
-                            id_match = re.search(r'([A-Z]+)\s*[\[{]?\s*
-        
-        # Create node objects with proper classification
-        for node_id, node_text in node_texts.items():
-            # Generate descriptive label
-            label = self._generate_descriptive_label(node_text, connections, node_id)
+    """Parse mermaid code into nodes and connections with enhanced text extraction"""
+    lines = [line.strip() for line in mermaid_code.split('\n') if line.strip()]
+    
+    nodes = []
+    connections = []
+    node_texts = {}
+    
+    # Parse each line
+    for line in lines:
+        if line.startswith('flowchart') or line.startswith('%%'):
+            continue
             
-            # Classify node type
-            node_type = self._classify_node_type(node_text, connections, node_id)
+        if '-->' in line:
+            # Parse connection
+            arrow_pos = line.find('-->')
+            left_part = line[:arrow_pos].strip()
+            right_part = line[arrow_pos + 3:].strip()
             
-            nodes.append({
-                'id': node_id,
-                'text': node_text,
-                'label': label,
-                'type': node_type
-            })
+            # Extract source node
+            source_id = self._extract_node_id_and_text(left_part, node_texts)
+            
+            # Extract connection label
+            connection_label = ""
+            if '|' in right_part:
+                label_start = right_part.find('|')
+                label_end = right_part.rfind('|')
+                if label_start < label_end:
+                    connection_label = right_part[label_start+1:label_end].strip('"').strip()
+                    right_part = (right_part[:label_start] + right_part[label_end+1:]).strip()
+            
+            # Extract target node
+            target_id = self._extract_node_id_and_text(right_part, node_texts)
+            
+            if source_id and target_id:
+                connections.append({
+                    'source': source_id,
+                    'target': target_id,
+                    'label': connection_label
+                })
+        else:
+            # Standalone node
+            self._extract_node_id_and_text(line, node_texts)
+    
+    # Create node objects
+    for node_id, node_text in node_texts.items():
+        label = self._generate_descriptive_label(node_text, connections, node_id)
+        node_type = self._classify_node_type(node_text, connections, node_id)
         
-        return nodes, connections
+        nodes.append({
+            'id': node_id,
+            'text': node_text,
+            'label': label,
+            'type': node_type
+        })
+    
+    return nodes, connections
+
+    def _extract_node_id_and_text(self, part: str, node_texts: dict) -> Optional[str]:
+    """Extract node ID and text from a mermaid part"""
+    if not part:
+        return None
+        
+    # Look for quoted text
+    if '"' in part:
+        quote_start = part.find('"')
+        quote_end = part.rfind('"')
+        if quote_start != -1 and quote_end != -1 and quote_end > quote_start:
+            # Find node ID before the quote
+            before_quote = part[:quote_start]
+            node_matches = re.findall(r'([A-Z][A-Z0-9]*)', before_quote)
+            if node_matches:
+                node_id = node_matches[-1]
+                # Extract and clean text
+                text_content = part[quote_start + 1:quote_end]
+                text_content = re.sub(r'<br\s*/?>', ' ', text_content)
+                text_content = re.sub(r'<[^>]+>', '', text_content)
+                text_content = text_content.strip()
+                
+                if node_id not in node_texts or len(text_content) > len(node_texts[node_id]):
+                    node_texts[node_id] = text_content
+                
+                return node_id
+    
+    # Fallback: just find node ID
+    node_matches = re.findall(r'([A-Z][A-Z0-9]*)', part)
+    if node_matches:
+        return node_matches[0]
+    
+    return None
 
     def _classify_node_type(self, text: str, connections: List[Dict[str, str]], node_id: str) -> NodeType:
         """Classify node type for proper IVR generation"""
