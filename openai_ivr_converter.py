@@ -1,124 +1,88 @@
 """
-UPDATED openai_ivr_converter.py - NO MORE HARD-CODED AUDIO IDs
-Integrates with enhanced audio mapping system instead of using hard-coded mappings
+Direct IVR conversion using OpenAI with specific IVR format handling
 """
 from typing import Dict, List, Any
 from openai import OpenAI
 import json
 import logging
 
-# Import enhanced components
-from enhanced_ivr_converter import EnhancedIVRConverter
-
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 class OpenAIIVRConverter:
-    """
-    ENHANCED OpenAI IVR Converter that uses real audio database instead of hard-coded IDs
-    """
-    
-    def __init__(self, api_key: str, audio_database_path: str = "cf_general_structure.csv"):
+    def __init__(self, api_key: str):
         self.client = OpenAI(api_key=api_key)
-        self.audio_database_path = audio_database_path
-        
-        # Initialize enhanced converter for final processing
-        try:
-            self.enhanced_converter = EnhancedIVRConverter(audio_database_path)
-            self.enhanced_available = True
-            logger.info("Enhanced audio mapping available")
-        except Exception as e:
-            logger.warning(f"Enhanced audio mapping not available: {e}")
-            self.enhanced_available = False
 
-    def convert_to_ivr(self, mermaid_code: str, company: str = "arcos", schema: str = None) -> str:
-        """
-        Convert Mermaid diagram to IVR configuration using GPT-4 + Enhanced Audio Mapping
+    def convert_to_ivr(self, mermaid_code: str) -> str:
+        """Convert Mermaid diagram to IVR configuration using GPT-4"""
         
-        This method now uses a two-step process:
-        1. GPT-4 generates the logical flow structure 
-        2. Enhanced audio mapper provides real audio IDs
-        """
-        
-        if self.enhanced_available:
-            # NEW APPROACH: Use enhanced converter directly
-            return self._convert_with_enhanced_mapping(mermaid_code, company, schema)
-        else:
-            # FALLBACK: Use GPT-4 with generic guidance
-            return self._convert_with_gpt4_fallback(mermaid_code)
-    
-    def _convert_with_enhanced_mapping(self, mermaid_code: str, company: str, schema: str) -> str:
-        """Convert using enhanced audio mapping (RECOMMENDED)"""
-        try:
-            logger.info("Using enhanced audio mapping for conversion")
-            
-            # Use enhanced converter directly - this gives us real audio IDs
-            js_code, report = self.enhanced_converter.convert_mermaid_to_ivr(
-                mermaid_code, 
-                company=company, 
-                schema=schema
-            )
-            
-            # Log success metrics
-            logger.info(f"Enhanced conversion: {report['overall_success_rate']:.1%} success rate")
-            if report['unique_missing_audio']:
-                logger.warning(f"Missing audio segments: {report['unique_missing_audio']}")
-            
-            return js_code
-            
-        except Exception as e:
-            logger.error(f"Enhanced conversion failed: {e}")
-            return self._convert_with_gpt4_fallback(mermaid_code)
-    
-    def _convert_with_gpt4_fallback(self, mermaid_code: str) -> str:
-        """Fallback GPT-4 conversion (when enhanced mapping not available)"""
-        
-        # UPDATED PROMPT: No more hard-coded audio IDs
-        prompt = f"""You are an expert IVR system developer. Convert this Mermaid flowchart into a complete IVR JavaScript configuration.
+        prompt = f"""You are an expert IVR system developer. Convert this Mermaid flowchart into a complete IVR JavaScript configuration following these exact requirements:
 
-        IMPORTANT: DO NOT use hard-coded audio IDs. Instead, generate logical flow structure and use descriptive placeholders.
+        The IVR system requires specific configuration format:
 
-        Requirements:
         1. Node Structure:
            - Each node must have a unique "label" (node identifier)
            - "log" property for documentation/logging
-           - "playPrompt" should use descriptive placeholders like ["WELCOME_MESSAGE"] or ["ERROR_PROMPT"]
-           - Include appropriate control flow (getDigits, branch, goto, etc.)
+           - "playPrompt" array with callflow IDs
+           - Optional properties based on node type:
+             * getDigits: For input collection
+             * branch: For conditional navigation
+             * goto: For direct transitions
+             * maxLoop: For retry limits
+             * gosub: For subroutine calls
+             * nobarge: For non-interruptible messages
 
-        2. Flow Control:
-           - Use "branch" for conditional paths based on user input
-           - Use "goto" for direct transitions
-           - Include proper error handling with "error" and "none" branches
-           - Add timeout handling where appropriate
+        2. Audio Prompts:
+           Use exact callflow IDs:
+           - 1001: Welcome/initial message
+           - 1008: PIN entry request
+           - 1009: Invalid input/retry
+           - 1010: Timeout message
+           - 1167: Accept response
+           - 1021: Decline response
+           - 1266: Qualified no response
+           - 1274: Electric callout info
+           - 1019: Callout reason
+           - 1232: Location information
+           - 1265: Wait message
+           - 1017: Not home message
+           - 1316: Availability check
+           - 1029: Goodbye message
+           - 1351: Error message
 
         3. Input Handling:
-           For nodes requiring user input, include:
+           For getDigits nodes:
            {{
-             "getDigits": {{
-               "numDigits": 1,
-               "maxTries": 3,
-               "validChoices": "1|2|3|7|9",
-               "errorPrompt": ["ERROR_INVALID_INPUT"],
-               "timeoutPrompt": ["ERROR_TIMEOUT"]
-             }}
+             "numDigits": <number>,
+             "maxTries": <number>,
+             "validChoices": "1|2|3",
+             "errorPrompt": "callflow:1009",
+             "timeoutPrompt": "callflow:1010"
            }}
 
-        4. Standard Navigation:
-           - Extract menu choices from edge labels (e.g., "Press 1" -> choice "1")
-           - Map choices to target nodes in branch object
-           - Include error handling for invalid/timeout conditions
+        4. Call Flow Control:
+           - Use "branch" for conditional paths
+           - Use "goto" for direct transitions
+           - Use "gosub" for subroutines like SaveCallResult
+           - Include retry logic with maxLoop
+           - Handle timeouts and errors
 
-        5. Response Actions:
-           For final actions, use gosub calls like:
-           {{"gosub": ["SaveCallResult", "RESPONSE_CODE", "DESCRIPTION"]}}
+        5. Standard Response Codes:
+           SaveCallResult parameters:
+           - Accept: [1001, "Accept"]
+           - Decline: [1002, "Decline"]
+           - Not Home: [1006, "NotHome"]
+           - Qualified No: [1145, "QualNo"]
+           - Error: [1198, "Error Out"]
 
-        Generate a complete, working IVR configuration. Use DESCRIPTIVE placeholders for audio prompts.
+        Here's the Mermaid diagram to convert:
 
-        Mermaid diagram:
         {mermaid_code}
 
-        Return only the JavaScript module in format: module.exports = [...];"""
+        Generate a complete IVR configuration that exactly matches this flow pattern.
+        Return only the JavaScript code in the format:
+        module.exports = [ ... ];"""
 
         try:
             response = self.client.chat.completions.create(
@@ -126,148 +90,56 @@ class OpenAIIVRConverter:
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are an expert IVR system developer. Focus on logical flow structure and use descriptive placeholders instead of hard-coded audio IDs."
+                        "content": "You are an expert IVR system developer specialized in creating precise IVR configurations with specific callflow IDs and control structures."
                     },
                     {
                         "role": "user",
                         "content": prompt
                     }
                 ],
-                temperature=0.1,
+                temperature=0.1,  # Low temperature for consistent output
                 max_tokens=4000
             )
 
             # Extract and clean the response
             ivr_code = response.choices[0].message.content.strip()
             
-            # Extract JavaScript code
+            # Extract just the JavaScript code
             if "module.exports = [" in ivr_code:
                 start_idx = ivr_code.find("module.exports = [")
                 end_idx = ivr_code.rfind("];") + 2
                 ivr_code = ivr_code[start_idx:end_idx]
 
-            # Validate structure
+            # Validate basic structure
             if not (ivr_code.startswith("module.exports = [") and ivr_code.endswith("];")):
                 raise ValueError("Invalid IVR code format generated")
 
-            # Add warning about placeholders
-            warning_comment = '''/**
- * WARNING: This IVR code contains placeholder audio prompts.
- * Use enhanced audio mapping to get real audio file IDs.
- * Placeholders like ["WELCOME_MESSAGE"] need to be replaced with actual audio IDs.
- */
+            # Basic validation of node structure
+            try:
+                nodes = json.loads(ivr_code[16:-1])  # Remove module.exports = and ;
+                if not isinstance(nodes, list):
+                    raise ValueError("Generated code is not a valid node array")
+                for node in nodes:
+                    if not isinstance(node, dict) or 'label' not in node:
+                        raise ValueError("Invalid node structure")
+            except json.JSONDecodeError:
+                raise ValueError("Generated code is not valid JSON")
 
-'''
-            
-            return warning_comment + ivr_code
+            return ivr_code
 
         except Exception as e:
-            logger.error(f"GPT-4 IVR conversion failed: {str(e)}")
-            return self._generate_error_fallback()
-
-    def _generate_error_fallback(self) -> str:
-        """Generate basic error handler when all conversion methods fail"""
-        return '''/**
- * IVR Configuration - Error Fallback
- * Generated when conversion failed
- */
-
-module.exports = [
+            logger.error(f"IVR conversion failed: {str(e)}")
+            # Return a basic error handler node
+            return '''module.exports = [
   {
     "label": "Problems",
-    "log": "Conversion error - please check input",
-    "playPrompt": ["ERROR_CONVERSION_FAILED"],
-    "nobarge": "1",
-    "goto": "End"
-  },
-  {
-    "label": "End",
-    "log": "End of call",
-    "playPrompt": ["GOODBYE_MESSAGE"],
-    "nobarge": "1"
+    "log": "Error handler",
+    "playPrompt": ["callflow:1351"],
+    "goto": "Goodbye"
   }
 ];'''
 
-    def get_conversion_info(self) -> Dict[str, Any]:
-        """Get information about available conversion methods"""
-        return {
-            "enhanced_mapping_available": self.enhanced_available,
-            "audio_database_path": self.audio_database_path,
-            "recommended_method": "enhanced" if self.enhanced_available else "gpt4_fallback",
-            "capabilities": {
-                "real_audio_ids": self.enhanced_available,
-                "placeholder_ids": True,
-                "logical_flow_generation": True
-            }
-        }
-
-
-def convert_mermaid_to_ivr(mermaid_code: str, api_key: str, 
-                          audio_database_path: str = "cf_general_structure.csv",
-                          company: str = "arcos", schema: str = None) -> str:
-    """
-    UPDATED wrapper function for Mermaid to IVR conversion
-    Now uses enhanced audio mapping when available
-    
-    Args:
-        mermaid_code: Mermaid diagram text
-        api_key: OpenAI API key
-        audio_database_path: Path to audio transcription database
-        company: Company context for audio mapping
-        schema: Schema context for audio mapping
-    
-    Returns:
-        JavaScript IVR configuration
-    """
-    converter = OpenAIIVRConverter(api_key, audio_database_path)
-    return converter.convert_to_ivr(mermaid_code, company, schema)
-
-
-# Helper function for batch conversion
-def batch_convert_diagrams(diagrams: List[str], api_key: str, 
-                          audio_database_path: str = "cf_general_structure.csv",
-                          company: str = "arcos", schema: str = None) -> List[Dict[str, Any]]:
-    """
-    Convert multiple Mermaid diagrams to IVR configurations
-    
-    Returns:
-        List of conversion results with metadata
-    """
-    converter = OpenAIIVRConverter(api_key, audio_database_path)
-    results = []
-    
-    for i, diagram in enumerate(diagrams):
-        try:
-            js_code = converter.convert_to_ivr(diagram, company, schema)
-            results.append({
-                "index": i,
-                "success": True,
-                "js_code": js_code,
-                "error": None
-            })
-        except Exception as e:
-            results.append({
-                "index": i,
-                "success": False,
-                "js_code": None,
-                "error": str(e)
-            })
-    
-    return results
-
-
-# Configuration helper
-def create_converter_config(audio_database_path: str = None, 
-                           company: str = None, 
-                           schema: str = None) -> Dict[str, str]:
-    """Helper to create converter configuration"""
-    config = {}
-    
-    if audio_database_path:
-        config["audio_database_path"] = audio_database_path
-    if company:
-        config["company"] = company  
-    if schema:
-        config["schema"] = schema
-        
-    return config
+def convert_mermaid_to_ivr(mermaid_code: str, api_key: str) -> str:
+    """Wrapper function for Mermaid to IVR conversion"""
+    converter = OpenAIIVRConverter(api_key)
+    return converter.convert_to_ivr(mermaid_code)
