@@ -376,46 +376,75 @@ class EnhancedMermaidIVRConverter:
 
     def _segment_text_for_voice_files(self, text: str) -> List[str]:
         """Segment text into logical voice file components"""
-        # Common segmentation patterns following Andres's approach
         segments = []
         
         # Handle common callout patterns
         if re.search(r'this\s+is\s+an?\s+.*callout', text.lower()):
             # Pattern: "This is an electric callout from Level 2"
-            parts = re.split(r'(this\s+is\s+an?)', text, flags=re.IGNORECASE)
-            if len(parts) > 2:
-                segments.append(parts[0] + parts[1])  # "This is an"
-                remaining = parts[2].strip()
-                
-                # Further split callout type and location
-                callout_parts = re.split(r'(callout)', remaining, flags=re.IGNORECASE)
-                if len(callout_parts) > 1:
-                    segments.append(callout_parts[0].strip())  # callout type
-                    segments.append(callout_parts[1])  # "callout"
-                    if len(callout_parts) > 2:
-                        segments.append(callout_parts[2].strip())  # remaining
-                else:
-                    segments.append(remaining)
+            # Split into components following Andres's approach
+            parts = []
+            
+            # Extract "This is an/a"
+            intro_match = re.search(r'(this\s+is\s+an?\s+)', text, re.IGNORECASE)
+            if intro_match:
+                parts.append(intro_match.group(1).strip())
+                remaining = text[intro_match.end():].strip()
             else:
-                segments.append(text)
+                remaining = text
+            
+            # Extract callout type and remaining
+            if 'callout' in remaining.lower():
+                callout_parts = re.split(r'\s+callout\s+', remaining, 1, flags=re.IGNORECASE)
+                if len(callout_parts) == 2:
+                    # Before "callout"
+                    if callout_parts[0].strip():
+                        parts.append(callout_parts[0].strip())
+                    parts.append("callout")
+                    # After "callout"
+                    if callout_parts[1].strip():
+                        parts.append(callout_parts[1].strip())
+                else:
+                    parts.append(remaining)
+            else:
+                parts.append(remaining)
+            
+            segments = parts
         
-        # Handle press instructions
-        elif re.search(r'press\s+\d+', text.lower()):
-            # Split on "Press X"
-            parts = re.split(r'(press\s+\d+)', text, flags=re.IGNORECASE)
-            segments.extend([part.strip() for part in parts if part.strip()])
+        # Handle multi-line press instructions
+        elif 'press' in text.lower() and ('\n' in text or '<br' in text):
+            # Split by line breaks and periods
+            lines = re.split(r'<br\s*/?>\s*|\n\s*', text)
+            for line in lines:
+                line = line.strip()
+                if line:
+                    # Further split long lines with press instructions
+                    if 'press' in line.lower() and '.' in line:
+                        press_parts = re.split(r'\.(?:\s+press|\s+if)', line, flags=re.IGNORECASE)
+                        for part in press_parts:
+                            part = part.strip()
+                            if part:
+                                segments.append(part)
+                    else:
+                        segments.append(line)
         
         # Handle simple sentences
         else:
             # Split on natural breaks (periods, commas followed by space)
-            parts = re.split(r'[.,]\s+', text)
-            segments.extend([part.strip() for part in parts if part.strip()])
+            if '.' in text or ',' in text:
+                parts = re.split(r'[.,]\s+', text)
+                segments = [part.strip() for part in parts if part.strip()]
+            else:
+                segments = [text]
+        
+        # Clean up segments
+        clean_segments = []
+        for segment in segments:
+            clean_segment = segment.strip()
+            if clean_segment and clean_segment != '.':
+                clean_segments.append(clean_segment)
         
         # If no segmentation happened, return the whole text
-        if not segments:
-            segments = [text]
-        
-        return segments
+        return clean_segments if clean_segments else [text]
 
     def _generate_ivr_flow(self, nodes: Dict[str, ParsedNode], connections: List[Dict[str, str]]) -> List[IVRNode]:
         """Generate IVR flow following Andres's structure"""
@@ -481,42 +510,169 @@ class EnhancedMermaidIVRConverter:
         play_log = []
         play_prompt = []
         
-        for i, segment in enumerate(node.segments):
+        for segment in node.segments:
+            # Clean segment for logging
+            clean_segment = self._clean_log_text(segment)
+            play_log.append(clean_segment)
+            
+            # Generate appropriate prompt
             if any(var in segment for var in node.variables.values()):
-                # This segment contains a variable
-                play_log.append(self._clean_log_text(segment))
-                play_prompt.append(segment)  # Keep variable syntax
+                # Keep variable syntax for prompts that contain variables
+                prompt_segment = segment
+                for original, replacement in node.variables.items():
+                    prompt_segment = prompt_segment.replace(original, replacement)
+                play_prompt.append(prompt_segment)
             else:
-                # Regular voice file segment
-                clean_segment = self._clean_log_text(segment)
-                play_log.append(clean_segment)
+                # Generate callflow ID for regular segments
                 callflow_id = self._generate_callflow_id(clean_segment)
                 play_prompt.append(f"callflow:{callflow_id}")
         
         # Create base IVR node
         ivr_node = IVRNode(
             label=node.label,
-            playLog=play_log if len(play_log) > 1 else play_log[0] if play_log else node.original_text,
-            playPrompt=play_prompt if len(play_prompt) > 1 else play_prompt[0] if play_prompt else f"callflow:{node.label}"
+            playLog=play_log if len(play_log) > 1 else (play_log[0] if play_log else node.original_text),
+            playPrompt=play_prompt if len(play_prompt) > 1 else (play_prompt[0] if play_prompt else f"callflow:{self._generate_callflow_id(node.original_text)}")
         )
         
-        # Add type-specific properties
-        if node.node_type == NodeType.DECISION:
-            self._add_decision_properties(ivr_node, connections)
-        elif node.node_type == NodeType.PIN_ENTRY:
-            self._add_pin_entry_properties(ivr_node)
-        elif node.node_type == NodeType.RESPONSE:
-            self._add_response_properties(ivr_node, node.original_text)
-        elif node.node_type == NodeType.GOODBYE:
+        # Add type-specific properties based on node content and connections
+        text_lower = node.original_text.lower()
+        
+        if 'press 1' in text_lower and 'press 3' in text_lower and len(connections) > 1:
+            # Main welcome/decision node
+            self._add_main_decision_properties(ivr_node, connections, node.original_text)
+        elif 'enter' in text_lower and 'pin' in text_lower:
+            self._add_pin_entry_properties(ivr_node, connections)
+        elif 'correct pin' in text_lower or ('pin' in text_lower and len(connections) > 1):
+            self._add_pin_validation_properties(ivr_node, connections)
+        elif 'available' in text_lower and 'callout' in text_lower and 'press' in text_lower:
+            self._add_availability_decision_properties(ivr_node, connections)
+        elif node.node_type == NodeType.RESPONSE or any(word in text_lower for word in ['accept', 'decline', 'not home', 'qualified']):
+            self._add_response_properties(ivr_node, text_lower)
+        elif 'press any key' in text_lower or '30-second' in text_lower:
+            self._add_sleep_properties(ivr_node, connections)
+        elif 'goodbye' in text_lower or 'thank you' in text_lower:
             ivr_node.nobarge = "1"
             ivr_node.goto = "hangup"
-        elif node.node_type == NodeType.SLEEP:
-            self._add_sleep_properties(ivr_node, connections)
+        elif 'disconnect' in text_lower:
+            ivr_node.nobarge = "1"
+            ivr_node.goto = "hangup"
         elif len(connections) == 1:
             # Simple goto for single connection
-            ivr_node.goto = connections[0]['target']
+            target_node = connections[0]['target']
+            ivr_node.goto = target_node
         
         return ivr_node
+
+    def _add_main_decision_properties(self, ivr_node: IVRNode, connections: List[Dict[str, str]], text: str):
+        """Add main decision properties for welcome message with multiple options"""
+        valid_choices = []
+        branch_map = {}
+        
+        # Parse the text to find mentioned options
+        text_lower = text.lower()
+        if 'press 1' in text_lower:
+            valid_choices.append('1')
+        if 'press 3' in text_lower:
+            valid_choices.append('3')
+        if 'press 7' in text_lower:
+            valid_choices.append('7')
+        if 'press 9' in text_lower:
+            valid_choices.append('9')
+        
+        # Map connections to choices
+        for conn in connections:
+            label = conn['label'].lower()
+            target = conn['target']
+            
+            if '1' in label or 'employee' in label:
+                branch_map['1'] = target
+            elif '3' in label or 'need more time' in label:
+                branch_map['3'] = target
+            elif '7' in label or 'not home' in label:
+                branch_map['7'] = target
+            elif '9' in label or 'repeat' in label or 'retry' in label:
+                branch_map['9'] = target
+            elif 'no input' in label or 'go to pg' in label:
+                branch_map['none'] = target
+        
+        # Set defaults if missing
+        if 'error' not in branch_map:
+            branch_map['error'] = 'Problems'
+        if 'none' not in branch_map:
+            branch_map['none'] = 'Sleep'  # Follow the pattern from Mermaid
+        
+        ivr_node.getDigits = {
+            "numDigits": 1,
+            "maxTries": 3,
+            "maxTime": 7,
+            "validChoices": "|".join(sorted(valid_choices)) if valid_choices else "1|3|7|9",
+            "errorPrompt": "callflow:InvalidInput"
+        }
+        
+        ivr_node.branch = branch_map
+
+    def _add_pin_validation_properties(self, ivr_node: IVRNode, connections: List[Dict[str, str]]):
+        """Add PIN validation properties"""
+        branch_map = {}
+        
+        for conn in connections:
+            label = conn['label'].lower()
+            if 'yes' in label or 'valid' in label:
+                branch_map['valid'] = conn['target']
+            elif 'no' in label or 'invalid' in label:
+                branch_map['invalid'] = conn['target']
+        
+        # Set defaults
+        if 'valid' not in branch_map and connections:
+            branch_map['valid'] = connections[0]['target']
+        if 'invalid' not in branch_map:
+            branch_map['invalid'] = 'Invalid Entry'
+        
+        ivr_node.getDigits = {
+            "numDigits": 4,
+            "maxTries": 3,
+            "maxTime": 10,
+            "errorPrompt": "callflow:InvalidPIN"
+        }
+        
+        ivr_node.branch = branch_map
+
+    def _add_availability_decision_properties(self, ivr_node: IVRNode, connections: List[Dict[str, str]]):
+        """Add availability decision properties"""
+        valid_choices = ['1', '3']
+        branch_map = {}
+        
+        for conn in connections:
+            label = conn['label'].lower()
+            target = conn['target']
+            
+            if '1' in label or 'accept' in label:
+                branch_map['1'] = target
+            elif '3' in label or 'decline' in label:
+                branch_map['3'] = target
+            elif '0' in label or '9' in label or 'call back' in label:
+                valid_choices.append('9')
+                branch_map['9'] = target
+            elif 'invalid' in label or 'no input' in label:
+                branch_map['error'] = target
+                branch_map['none'] = target
+        
+        # Set defaults
+        if 'error' not in branch_map:
+            branch_map['error'] = 'Problems'
+        if 'none' not in branch_map:
+            branch_map['none'] = 'Problems'
+        
+        ivr_node.getDigits = {
+            "numDigits": 1,
+            "maxTries": 3,
+            "maxTime": 7,
+            "validChoices": "|".join(sorted(valid_choices)),
+            "errorPrompt": "callflow:InvalidInput",
+            "nonePrompt": "callflow:NoInput"
+        }
+        
+        ivr_node.branch = branch_map
 
     def _add_decision_properties(self, ivr_node: IVRNode, connections: List[Dict[str, str]]):
         """Add decision node properties (getDigits and branch)"""
@@ -639,15 +795,57 @@ class EnhancedMermaidIVRConverter:
 
     def _clean_log_text(self, text: str) -> str:
         """Clean text for log entries"""
-        # Remove variable syntax and clean up
-        cleaned = re.sub(r'\{\{[^}]+\}\}', '[Variable]', text)
+        # Replace variables with placeholder text for logs
+        cleaned = text
+        for pattern, replacement in self.variable_patterns.items():
+            # Replace with descriptive text for logs
+            if '{{level2_location}}' in replacement:
+                cleaned = re.sub(pattern, 'Level 2', cleaned, flags=re.IGNORECASE)
+            elif '{{contact_id}}' in replacement:
+                cleaned = re.sub(pattern, 'Employee', cleaned, flags=re.IGNORECASE)
+            elif '{{callout_type}}' in replacement:
+                cleaned = re.sub(pattern, 'Callout Type', cleaned, flags=re.IGNORECASE)
+            elif '{{callout_reason}}' in replacement:
+                cleaned = re.sub(pattern, 'Callout Reason', cleaned, flags=re.IGNORECASE)
+            elif '{{callout_location}}' in replacement:
+                cleaned = re.sub(pattern, 'Trouble Location', cleaned, flags=re.IGNORECASE)
+            elif '{{callback_number}}' in replacement:
+                cleaned = re.sub(pattern, 'Phone Number', cleaned, flags=re.IGNORECASE)
+        
         return cleaned.strip()
+
+    def _add_response_properties(self, ivr_node: IVRNode, text: str):
+        """Add response handling properties"""
+        text_lower = text.lower()
+        
+        if 'accept' in text_lower:
+            ivr_node.gosub = self.standard_responses['accept']
+        elif 'decline' in text_lower:
+            ivr_node.gosub = self.standard_responses['decline']
+        elif 'not home' in text_lower:
+            ivr_node.gosub = self.standard_responses['not_home']
+        elif 'qualified' in text_lower:
+            ivr_node.gosub = self.standard_responses['qualified_no']
+        
+        ivr_node.goto = "Goodbye"
+
+    def _generate_unique_label(self, base_label: str, existing_labels: Set[str]) -> str:
+        """Generate unique label to avoid duplicates"""
+        if base_label not in existing_labels:
+            return base_label
+        
+        # Add suffix to make unique
+        counter = 2
+        while f"{base_label} {counter}" in existing_labels:
+            counter += 1
+        
+        return f"{base_label} {counter}"
 
     def _generate_callflow_id(self, text: str) -> str:
         """Generate callflow ID from text"""
         # Extract meaningful words and create camelCase ID
         words = re.findall(r'\w+', text)
-        meaningful_words = [w for w in words if len(w) > 2 and w.lower() not in ['the', 'and', 'for', 'are', 'you']]
+        meaningful_words = [w for w in words if len(w) > 2 and w.lower() not in ['the', 'and', 'for', 'are', 'you', 'this', 'that', 'with']]
         
         if meaningful_words:
             # CamelCase the words
@@ -656,8 +854,97 @@ class EnhancedMermaidIVRConverter:
                 callflow_id += word.capitalize()
             return callflow_id
         else:
-            # Fallback to first few chars
-            return re.sub(r'\W', '', text)[:10]
+            # Fallback to first few chars, cleaned
+            cleaned = re.sub(r'\W', '', text)
+            return cleaned[:10] if cleaned else "prompt"
+
+    def _add_pin_entry_properties(self, ivr_node: IVRNode, connections: List[Dict[str, str]]):
+        """Add PIN entry properties"""
+        ivr_node.getDigits = {
+            "numDigits": 4,
+            "maxTries": 3,
+            "maxTime": 10,
+            "errorPrompt": "callflow:InvalidPIN",
+            "nonePrompt": "callflow:NoInput"
+        }
+        
+        # Simple branch logic for PIN entry
+        if connections:
+            ivr_node.branch = {
+                "next": connections[0]['target'],
+                "error": "Invalid Entry",
+                "none": "Invalid Entry"
+            }
+        else:
+            ivr_node.branch = {
+                "next": "Check PIN",
+                "error": "Invalid Entry", 
+                "none": "Invalid Entry"
+            }
+
+    def _generate_ivr_flow(self, nodes: Dict[str, ParsedNode], connections: List[Dict[str, str]]) -> List[IVRNode]:
+        """Generate IVR flow following Andres's structure"""
+        ivr_nodes = []
+        used_labels = set()
+        
+        # Build connection map
+        conn_map = {}
+        for conn in connections:
+            if conn['source'] not in conn_map:
+                conn_map[conn['source']] = []
+            conn_map[conn['source']].append(conn)
+        
+        # Find start node (no incoming connections)
+        incoming = {conn['target'] for conn in connections}
+        start_nodes = [node_id for node_id in nodes.keys() if node_id not in incoming]
+        
+        # If no clear start node, use the first node alphabetically
+        if not start_nodes and nodes:
+            start_nodes = [sorted(nodes.keys())[0]]
+        
+        # Remove the old method call references and update
+        processed = set()
+        
+        # First, process start nodes and their descendants
+        for start_node in start_nodes:
+            self._process_node_recursive_with_unique_labels(start_node, nodes, conn_map, ivr_nodes, processed, used_labels)
+        
+        # Then process any remaining unprocessed nodes
+        for node_id in nodes.keys():
+            if node_id not in processed:
+                self._process_node_recursive_with_unique_labels(node_id, nodes, conn_map, ivr_nodes, processed, used_labels)
+        
+        # Add standard error handler if not present
+        if not any(node.label == "Problems" for node in ivr_nodes):
+            problems_node = self._create_error_handler()
+            problems_node.label = self._generate_unique_label("Problems", used_labels)
+            ivr_nodes.append(problems_node)
+        
+        return ivr_nodes
+
+    def _process_node_recursive_with_unique_labels(self, node_id: str, nodes: Dict[str, ParsedNode], 
+                               conn_map: Dict[str, List[Dict[str, str]]], 
+                               ivr_nodes: List[IVRNode], processed: Set[str], used_labels: Set[str]):
+        """Recursively process nodes with unique label generation"""
+        if node_id in processed or node_id not in nodes:
+            return
+        
+        processed.add(node_id)
+        node = nodes[node_id]
+        
+        # Ensure unique label
+        node.label = self._generate_unique_label(node.label, used_labels)
+        used_labels.add(node.label)
+        
+        # Create IVR node based on type
+        node_connections = conn_map.get(node_id, [])
+        ivr_node = self._create_ivr_node(node, node_connections)
+        ivr_nodes.append(ivr_node)
+        
+        # Process connected nodes
+        for conn in node_connections:
+            if conn['target'] in nodes:
+                self._process_node_recursive_with_unique_labels(conn['target'], nodes, conn_map, ivr_nodes, processed, used_labels)
 
     def _node_to_dict(self, node: IVRNode) -> Dict[str, Any]:
         """Convert IVRNode to dictionary for JSON serialization"""
@@ -666,27 +953,28 @@ class EnhancedMermaidIVRConverter:
         }
         
         # Add log (use different property names based on type)
-        if isinstance(node.playLog, list):
+        if isinstance(node.playLog, list) and len(node.playLog) > 1:
             result["playLog"] = node.playLog
         else:
-            result["log"] = node.playLog
+            log_text = node.playLog[0] if isinstance(node.playLog, list) else node.playLog
+            result["log"] = log_text
         
         # Add playPrompt
         result["playPrompt"] = node.playPrompt
         
-        # Add optional properties
+        # Add optional properties in the order that matches allflows lite
         if node.getDigits:
             result["getDigits"] = node.getDigits
         if node.branch:
             result["branch"] = node.branch
-        if node.goto:
-            result["goto"] = node.goto
-        if node.gosub:
-            result["gosub"] = node.gosub
-        if node.nobarge:
-            result["nobarge"] = node.nobarge
         if node.maxLoop:
             result["maxLoop"] = node.maxLoop
+        if node.gosub:
+            result["gosub"] = node.gosub
+        if node.goto:
+            result["goto"] = node.goto
+        if node.nobarge:
+            result["nobarge"] = node.nobarge
             
         return result
 
