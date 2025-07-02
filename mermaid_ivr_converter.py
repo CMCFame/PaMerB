@@ -1,5 +1,6 @@
 """
 Complete Database-Driven Mermaid to IVR Converter
+Enhanced for full allflows LITE compatibility
 Uses cf_general_structure.csv to map text to actual voice files
 Generates production-ready IVR code with real callflow IDs
 Automates Andres's manual voice file search process
@@ -51,7 +52,7 @@ class DatabaseDrivenIVRConverter:
         self.folder_index: Dict[str, List[VoiceFile]] = {}
         self.exact_match_index: Dict[str, VoiceFile] = {}
         
-        # Variable patterns for detection and conversion
+        # Enhanced variable patterns for detection and conversion
         self.variable_patterns = {
             r'\(level\s*2\)': '{{level2_location}}',
             r'\(level2\)': '{{level2_location}}',
@@ -64,7 +65,13 @@ class DatabaseDrivenIVRConverter:
             r'\(callback\s*number\)': '{{callback_number}}',
             r'\(phone\s*number\)': '{{callback_number}}',
             r'\(pin\)': '{{pin}}',
-            r'\(contact\s*id\)': '{{contact_id}}'
+            r'\(contact\s*id\)': '{{contact_id}}',
+            r'\(job\s*start\s*date\)': '{{job_start_date}}',
+            r'\(job\s*start\s*time\)': '{{job_start_time}}',
+            r'\(job\s*end\s*date\)': '{{job_end_date}}',
+            r'\(job\s*end\s*time\)': '{{job_end_time}}',
+            r'\(custom\s*message\)': '{{custom_message}}',
+            r'\(callout\s*office\)': '{{callout_office}}'
         }
         
         # Standard response codes from allflows examples
@@ -76,86 +83,112 @@ class DatabaseDrivenIVRConverter:
             'error': ['SaveCallResult', 1198, 'Error Out']
         }
         
-        # Load voice file database
+        # Load enhanced voice file database
         self._load_voice_database()
 
     def _load_voice_database(self):
-        """Load and index the complete voice file database from CSV"""
+        """Load and index the complete voice file database from CSV with enhanced allflows LITE support"""
         try:
-            # Load essential voice files from CSV analysis and allflows examples
+            # Enhanced voice files including all allflows LITE patterns
             voice_data = [
                 # Core callflow files from allflows examples
-                ("arcos", "callflow", "1177.ulaw", "This is an automated test callout from"),
-                ("arcos", "callflow", "1178.ulaw", "Again, this is a TEST callout only."),
-                ("arcos", "callflow", "1231.ulaw", "It is"),
-                ("arcos", "callflow", "1002.ulaw", "Press 1 if this is"),
-                ("arcos", "callflow", "1005.ulaw", "if you need more time to get"),
-                ("arcos", "callflow", "1006.ulaw", "to the phone"),
-                ("arcos", "callflow", "1641.ulaw", "if"),
-                ("arcos", "callflow", "1004.ulaw", "is not home"),
-                ("arcos", "callflow", "1643.ulaw", "to repeat this message"),
-                ("arcos", "callflow", "1191.ulaw", "This is an"),
-                ("arcos", "callflow", "1274.ulaw", "callout"),
-                ("arcos", "callflow", "1589.ulaw", "from"),
-                ("arcos", "callflow", "1210.ulaw", "This is a"),
-                ("arcos", "callflow", "1019.ulaw", "The callout reason is"),
-                ("arcos", "callflow", "1232.ulaw", "The trouble location is"),
+                ("arcos", "callflow", "1177.ulaw", "This is an automated test callout from", "1177"),
+                ("arcos", "callflow", "1178.ulaw", "Again, this is a TEST callout only.", "1178"),
+                ("arcos", "callflow", "1231.ulaw", "It is", "1231"),
+                ("arcos", "callflow", "1002.ulaw", "Press 1 if this is", "1002"),
+                ("arcos", "callflow", "1005.ulaw", "if you need more time to get", "1005"),
+                ("arcos", "callflow", "1006.ulaw", "to the phone", "1006"),
+                ("arcos", "callflow", "1641.ulaw", "if", "1641"),
+                ("arcos", "callflow", "1004.ulaw", "is not home", "1004"),
+                ("arcos", "callflow", "1643.ulaw", "to repeat this message", "1643"),
+                ("arcos", "callflow", "1191.ulaw", "This is an", "1191"),
+                ("arcos", "callflow", "1274.ulaw", "callout", "1274"),
+                ("arcos", "callflow", "1589.ulaw", "from", "1589"),
+                ("arcos", "callflow", "1210.ulaw", "This is a", "1210"),
+                ("arcos", "callflow", "1019.ulaw", "The callout reason is", "1019"),
+                ("arcos", "callflow", "1232.ulaw", "The trouble location is", "1232"),
+                
+                # Time and date handling (from allflows LITE)
+                ("arcos", "callflow", "1166.ulaw", "This call was initiated at", "1166"),
+                ("arcos", "callflow", "1011.ulaw", "for a", "1011"),
+                ("arcos", "callflow", "1223.ulaw", "starting", "1223"),
+                ("arcos", "callflow", "1190.ulaw", "and ending", "1190"),
+                ("arcos", "callflow", "1149.ulaw", "Please contact the", "1149"),
+                ("arcos", "callflow", "1175.ulaw", "automated voice response system at", "1175"),
                 
                 # PIN and validation
-                ("arcos", "callflow", "1008.ulaw", "Please enter your four digit PIN followed by the pound key."),
-                ("arcos", "callflow", "1009.ulaw", "Invalid entry."),
-                ("arcos", "callflow", "MSG028.ulaw", "I'm sorry. That is an invalid entry. Please try again."),
+                ("arcos", "callflow", "1008.ulaw", "Please enter your four digit PIN followed by the pound key", "1008"),
+                ("arcos", "callflow", "1009.ulaw", "Invalid entry", "1009"),
+                ("arcos", "callflow", "MSG028.ulaw", "I'm sorry. That is an invalid entry. Please try again.", "MSG028"),
                 
                 # Responses and confirmations
-                ("arcos", "callflow", "1167.ulaw", "An accepted response has been recorded."),
-                ("arcos", "callflow", "1021.ulaw", "Your response is being recorded as a decline."),
-                ("arcos", "callflow", "1266.ulaw", "You may be called again on this callout if no one else accepts."),
-                ("arcos", "callflow", "1316.ulaw", "Are you available to work this callout?"),
+                ("arcos", "callflow", "1167.ulaw", "An accepted response has been recorded", "1167"),
+                ("arcos", "callflow", "1021.ulaw", "Your response is being recorded as a decline", "1021"),
+                ("arcos", "callflow", "1266.ulaw", "You may be called again on this callout if no one else accepts", "1266"),
+                ("arcos", "callflow", "1316.ulaw", "Are you available to work this callout", "1316"),
+                ("arcos", "callflow", "1317.ulaw", "If yes, press 1. If no, press 3", "1317"),
+                ("arcos", "callflow", "1318.ulaw", "If no one else accepts, and you want to be called again, press 0", "1318"),
                 
                 # System messages
-                ("arcos", "callflow", "1351.ulaw", "I'm sorry you are having problems."),
-                ("arcos", "callflow", "1265.ulaw", "Press any key to continue."),
-                ("arcos", "callflow", "MSG003.ulaw", "Goodbye."),
-                ("arcos", "callflow", "MSG023.ulaw", "Thank you."),
-                ("arcos", "callflow", "1029.ulaw", "Goodbye."),
+                ("arcos", "callflow", "1351.ulaw", "I'm sorry you are having problems", "1351"),
+                ("arcos", "callflow", "1265.ulaw", "Press any key to continue", "1265"),
+                ("arcos", "callflow", "MSG003.ulaw", "Goodbye", "MSG003"),
+                ("arcos", "callflow", "MSG023.ulaw", "Thank you", "MSG023"),
+                ("arcos", "callflow", "1029.ulaw", "Goodbye", "1029"),
                 
                 # Contact and location handling
-                ("arcos", "callflow", "1017.ulaw", "Please have"),
-                ("arcos", "callflow", "1174.ulaw", "call the"),
-                ("arcos", "callflow", "1290.ulaw", "callout system"),
-                ("arcos", "callflow", "1015.ulaw", "at"),
+                ("arcos", "callflow", "1017.ulaw", "Please have", "1017"),
+                ("arcos", "callflow", "1174.ulaw", "call the", "1174"),
+                ("arcos", "callflow", "1290.ulaw", "callout system", "1290"),
+                ("arcos", "callflow", "1015.ulaw", "at", "1015"),
+                ("arcos", "callflow", "1291.ulaw", "866-502-7267", "1291"),
                 
                 # Company files (from allflows examples)
-                ("arcos", "company", "1202.ulaw", "ARCOS"),
-                ("integrys", "company", "1201.ulaw", "INTEGRYS"),
-                ("weceg", "company", "1203.ulaw", "WECEG"),
-                ("arcos", "company", "1204.ulaw", "company name"),
+                ("arcos", "company", "1202.ulaw", "ARCOS", "1202"),
+                ("integrys", "company", "1201.ulaw", "INTEGRYS", "1201"),
+                ("weceg", "company", "1203.ulaw", "WECEG", "1203"),
+                ("arcos", "company", "1204.ulaw", "company name", "1204"),
+                ("arcos", "company", "1265.ulaw", "Press any key to continue", "1265"),
                 
                 # Standard press files
-                ("arcos", "standard", "PRS1NEU.ulaw", "Press 1."),
-                ("arcos", "standard", "PRS7NEU.ulaw", "Press 7."),
-                ("arcos", "standard", "PRS9NEU.ulaw", "Press 9."),
+                ("arcos", "standard", "PRS1NEU.ulaw", "Press 1", "PRS1NEU"),
+                ("arcos", "standard", "PRS3NEU.ulaw", "Press 3", "PRS3NEU"),
+                ("arcos", "standard", "PRS7NEU.ulaw", "Press 7", "PRS7NEU"),
+                ("arcos", "standard", "PRS9NEU.ulaw", "Press 9", "PRS9NEU"),
                 
-                # Additional common phrases from CSV analysis
-                ("aep", "callout_type", "1001.ulaw", "Normal."),
-                ("aep", "callout_type", "1009.ulaw", "All hand."),
-                ("aep", "callout_type", "1022.ulaw", "Travel."),
-                ("aep", "callout_type", "1025.ulaw", "Notification."),
-                ("aep", "callout_type", "1027.ulaw", "911 emergency."),
-                ("aep", "callout_type", "1110.ulaw", "Planned overtime."),
+                # Callout type files (enhanced from allflows LITE)
+                ("aep", "callout_type", "1001.ulaw", "Normal", "1001"),
+                ("aep", "callout_type", "1009.ulaw", "All hand", "1009"),
+                ("aep", "callout_type", "1018.ulaw", "Storm", "1018"),
+                ("aep", "callout_type", "1022.ulaw", "Travel", "1022"),
+                ("aep", "callout_type", "1025.ulaw", "Notification", "1025"),
+                ("aep", "callout_type", "1027.ulaw", "911 emergency", "1027"),
+                ("aep", "callout_type", "1110.ulaw", "Planned overtime", "1110"),
+                ("arcos", "callout_type", "electric.ulaw", "electric", "electric"),
+                
+                # Additional specialized voice files for advanced patterns
+                ("arcos", "system", "current.ulaw", "current time", "current"),
+                ("arcos", "system", "dow.ulaw", "day of week", "dow"),
+                ("arcos", "system", "date.ulaw", "date", "date"), 
+                ("arcos", "system", "time.ulaw", "time", "time"),
+                ("arcos", "system", "env.ulaw", "environment", "env"),
+                
+                # Location specific files
+                ("arcos", "location", "APS.ulaw", "APS", "APS"),
+                ("weceg", "location", "WECEG.ulaw", "WE Energies", "WECEG"),
+                ("integrys", "location", "INTEGRYS.ulaw", "Integrys", "INTEGRYS"),
             ]
             
             # Convert to VoiceFile objects
             self.voice_files = []
-            for company, folder, file_name, transcript in voice_data:
-                callflow_id = file_name.replace(".ulaw", "")
+            for company, folder, file_name, transcript, callflow_id in voice_data:
                 voice_file = VoiceFile(company, folder, file_name, transcript, callflow_id)
                 self.voice_files.append(voice_file)
             
             # Build indexes for fast lookup
             self._build_indexes()
             
-            print(f"Loaded {len(self.voice_files)} voice files into database")
+            print(f"Loaded {len(self.voice_files)} enhanced voice files into database")
             
         except Exception as e:
             print(f"Warning: Could not load voice database: {e}")
@@ -287,7 +320,7 @@ class DatabaseDrivenIVRConverter:
         return segments if segments else [text]
 
     def _generate_database_prompts(self, segments: List[str], variables: Dict[str, str], notes: List[str]) -> Tuple[List[str], List[str]]:
-        """Generate playLog and playPrompt arrays using database matching"""
+        """Generate playLog and playPrompt arrays using enhanced database matching for allflows LITE compatibility"""
         play_log = []
         play_prompt = []
         
@@ -295,29 +328,79 @@ class DatabaseDrivenIVRConverter:
             if not segment.strip():
                 continue
                 
-            # Clean segment for log
-            log_segment = segment
-            for var_replacement, var_text in variables.items():
-                # Show original variable name in log
-                for pattern, repl in self.variable_patterns.items():
-                    if repl == var_replacement:
-                        log_segment = log_segment.replace(var_replacement, var_text)
-                        break
-            play_log.append(log_segment)
-            
-            # Find voice file match for prompt
+            # Enhanced variable handling for allflows LITE patterns
             if any(var in segment for var in variables.values()):
-                # Contains variables - use as-is
-                play_prompt.append(segment)
+                # Detect specific variable types and use appropriate voice file references
+                if '{{contact_id}}' in segment:
+                    play_log.append("Employee name spoken")
+                    play_prompt.append("names:{{contact_id}}")
+                elif '{{level2_location}}' in segment:
+                    play_log.append("location")
+                    play_prompt.append("location:{{level2_location}}")
+                elif '{{callback_number}}' in segment:
+                    play_log.append("speak phone num")
+                    play_prompt.append("digits:{{callback_number}}")
+                elif '{{callout_reason}}' in segment:
+                    play_log.append("reason")
+                    play_prompt.append("reason:{{callout_reason}}")
+                elif '{{callout_type}}' in segment:
+                    play_log.append("type")
+                    play_prompt.append("type:{{callout_type}}")
+                elif '{{custom_message}}' in segment:
+                    play_log.append("custom message")
+                    play_prompt.append("custom:{{custom_message}}")
+                elif '{{job_start_date}}' in segment:
+                    # Handle time/date variables like allflows LITE
+                    if 'dow' in segment.lower() or 'day' in segment.lower():
+                        play_log.append("day of week")
+                        play_prompt.append("dow: {{job_start_date}}")
+                    elif 'date' in segment.lower():
+                        play_log.append("date")
+                        play_prompt.append("date: {{job_start_date}}")
+                    else:
+                        play_log.append(segment)
+                        play_prompt.append(segment)
+                elif '{{job_start_time}}' in segment or '{{job_end_time}}' in segment:
+                    play_log.append("time")
+                    if '{{job_start_time}}' in segment:
+                        play_prompt.append("time: {{job_start_time}}")
+                    else:
+                        play_prompt.append("time: {{job_end_time}}")
+                else:
+                    # Generic variable handling
+                    play_log.append(segment)
+                    play_prompt.append(segment)
             else:
-                # Look up in database
+                # Look up in database for non-variable segments
                 voice_match = self._find_voice_file_match(segment)
                 if voice_match:
-                    # Determine voice file type based on folder
+                    # Clean segment for log
+                    log_segment = segment
+                    for var_replacement, var_text in variables.items():
+                        # Show original variable name in log
+                        for pattern, repl in self.variable_patterns.items():
+                            if repl == var_replacement:
+                                log_segment = log_segment.replace(var_replacement, var_text)
+                                break
+                    play_log.append(log_segment)
+                    
+                    # Determine voice file type based on folder (enhanced for allflows LITE)
                     if voice_match.folder == "company":
                         prompt_ref = f"company:{voice_match.callflow_id}"
                     elif voice_match.folder == "standard":
                         prompt_ref = f"standard:{voice_match.callflow_id}"
+                    elif voice_match.folder == "callout_type":
+                        prompt_ref = f"type:{voice_match.callflow_id}"
+                    elif voice_match.folder == "location":
+                        prompt_ref = f"location:{voice_match.callflow_id}"
+                    elif voice_match.folder == "reason":
+                        prompt_ref = f"reason:{voice_match.callflow_id}"
+                    elif voice_match.folder == "system":
+                        # Handle special system files like current time
+                        if voice_match.callflow_id in ["current", "dow", "date", "time"]:
+                            prompt_ref = f"{voice_match.callflow_id}: {{{{system_data}}}}"
+                        else:
+                            prompt_ref = f"system:{voice_match.callflow_id}"
                     else:
                         prompt_ref = f"callflow:{voice_match.callflow_id}"
                     
@@ -325,6 +408,14 @@ class DatabaseDrivenIVRConverter:
                     notes.append(f"Database match: '{segment}' → {prompt_ref}")
                 else:
                     # No match found - generate fallback
+                    log_segment = segment
+                    for var_replacement, var_text in variables.items():
+                        for pattern, repl in self.variable_patterns.items():
+                            if repl == var_replacement:
+                                log_segment = log_segment.replace(var_replacement, var_text)
+                                break
+                    play_log.append(log_segment)
+                    
                     fallback_id = self._generate_fallback_id(segment)
                     play_prompt.append(f"callflow:{fallback_id}")
                     notes.append(f"No database match for: '{segment}' → fallback ID {fallback_id}")
@@ -339,6 +430,15 @@ class DatabaseDrivenIVRConverter:
         else:
             return "Unknown"
 
+    def _should_split_into_glommer_nodes(self, text: str) -> bool:
+        """Detect if node should be split into multiple objects (glommer nodes)"""
+        # Split if text is very long or contains multiple distinct concepts
+        word_count = len(text.split())
+        concept_indicators = ['press', 'if', 'callout', 'reason', 'location', 'time', 'available']
+        concept_count = sum(1 for indicator in concept_indicators if indicator in text.lower())
+        
+        return word_count > 30 or concept_count > 3
+
     def convert(self, mermaid_code: str) -> Tuple[List[Dict[str, Any]], List[str]]:
         """Main conversion method using database-driven approach"""
         notes = []
@@ -352,7 +452,7 @@ class DatabaseDrivenIVRConverter:
                 return self._create_fallback_flow(), notes
             
             notes.append(f"Parsed {len(nodes)} nodes and {len(connections)} connections")
-            notes.append(f"Using voice database with {len(self.voice_files)} voice files")
+            notes.append(f"Using enhanced voice database with {len(self.voice_files)} voice files")
             
             # Generate IVR flow using database
             ivr_nodes = self._generate_database_driven_flow(nodes, connections, notes)
@@ -361,7 +461,7 @@ class DatabaseDrivenIVRConverter:
                 notes.append("No IVR nodes generated")
                 return self._create_fallback_flow(), notes
             
-            notes.append(f"Generated {len(ivr_nodes)} IVR nodes with database matching")
+            notes.append(f"Generated {len(ivr_nodes)} IVR nodes with enhanced allflows LITE compatibility")
             
             return ivr_nodes, notes
             
@@ -532,7 +632,7 @@ class DatabaseDrivenIVRConverter:
                 return node_id.title()
 
     def _generate_database_driven_flow(self, nodes: List[Dict[str, Any]], connections: List[Dict[str, str]], notes: List[str]) -> List[Dict[str, Any]]:
-        """Generate complete IVR flow using database-driven approach"""
+        """Generate complete IVR flow using database-driven approach with allflows LITE patterns"""
         if not nodes:
             notes.append("No nodes to process")
             return []
@@ -557,17 +657,75 @@ class DatabaseDrivenIVRConverter:
         for node in nodes:
             label = node_id_to_label[node['id']]
             
-            # Generate IVR node(s) based on type
+            # Generate IVR node(s) based on type and complexity
             node_connections = [conn for conn in connections if conn['source'] == node['id']]
-            generated_nodes = self._create_database_node_with_mapping(node, label, node_connections, node_id_to_label, notes)
+            
+            # Check if we should create multi-object nodes (glommer nodes)
+            if self._should_split_into_glommer_nodes(node['text']) and node.get('type') == NodeType.WELCOME:
+                generated_nodes = self._create_multi_object_welcome_node(node, label, node_connections, node_id_to_label, notes)
+            else:
+                generated_nodes = self._create_database_node_with_mapping(node, label, node_connections, node_id_to_label, notes)
             
             for ivr_node in generated_nodes:
+                # Add nobarge where appropriate
+                if node.get('type') in [NodeType.RESPONSE, NodeType.GOODBYE, NodeType.ERROR]:
+                    ivr_node["nobarge"] = "1"
                 ivr_nodes.append(ivr_node)
         
         # Add standard handlers if not present
         self._ensure_standard_handlers(ivr_nodes, used_labels, notes)
         
         return ivr_nodes
+
+    def _create_multi_object_welcome_node(self, node: Dict[str, Any], label: str, connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]) -> List[Dict[str, Any]]:
+        """Create multi-object welcome node following allflows LITE patterns"""
+        text = node['text']
+        segments, variables = self._intelligent_segmentation(text)
+        play_log, play_prompt = self._generate_database_prompts(segments, variables, notes)
+        
+        nodes = []
+        
+        # Object 1: Main callout information (first part)
+        main_segments = 5  # Split at reasonable boundary
+        main_node = {
+            "label": label
+        }
+        
+        if len(play_log) > main_segments:
+            main_node["playLog"] = play_log[:main_segments]
+            main_node["playPrompt"] = play_prompt[:main_segments]
+        else:
+            main_node["playLog"] = play_log
+            main_node["playPrompt"] = play_prompt
+        
+        nodes.append(main_node)
+        
+        # Object 2: Environment check (if not production) - allflows LITE pattern
+        env_node = {
+            "log": "environment",
+            "guard": "function (){ return this.data.env!='prod' && this.data.env!='PROD' }",
+            "playPrompt": "callflow:{{env}}",
+            "nobarge": "1"
+        }
+        nodes.append(env_node)
+        
+        # Object 3: Menu options with getDigits (remaining segments)
+        menu_node = {}
+        
+        if len(play_log) > main_segments:
+            menu_node["playLog"] = play_log[main_segments:]
+            menu_node["playPrompt"] = play_prompt[main_segments:]
+        else:
+            menu_node["playLog"] = ["Menu options"]
+            menu_node["playPrompt"] = ["callflow:MenuOptions"]
+        
+        # Add getDigits and branch logic
+        self._add_welcome_logic_with_mapping(menu_node, connections, node_id_to_label, notes)
+        nodes.append(menu_node)
+        
+        notes.append(f"Created multi-object welcome node with {len(nodes)} components")
+        
+        return nodes
 
     def _create_database_node_with_mapping(self, node: Dict[str, Any], label: str, connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]) -> List[Dict[str, Any]]:
         """Create IVR node(s) using database matching with proper label mapping"""
@@ -587,7 +745,7 @@ class DatabaseDrivenIVRConverter:
         if len(play_log) > 1:
             ivr_node["playLog"] = play_log
         elif play_log:
-            ivr_node["playLog"] = play_log[0]
+            ivr_node["log"] = play_log[0]  # Single log entry uses "log" instead of "playLog"
         
         if len(play_prompt) > 1:
             ivr_node["playPrompt"] = play_prompt
@@ -618,7 +776,7 @@ class DatabaseDrivenIVRConverter:
         """Add welcome node logic following allflows patterns with proper label mapping"""
         ivr_node["getDigits"] = {
             "numDigits": 1,
-            "maxTime": 1,  # Very short timeout for main menu
+            "maxTime": 1,  # Very short timeout for main menu (allflows LITE pattern)
             "validChoices": "",
             "errorPrompt": "callflow:1009"
         }
@@ -636,21 +794,28 @@ class DatabaseDrivenIVRConverter:
                 target_label = node_id_to_label.get(target_id, target_id)
                 branch[digit] = target_label
                 valid_choices.append(digit)
+            elif 'retry' in label or 'repeat' in label or 'invalid' in label:
+                # Self-reference for retries
+                branch["error"] = ivr_node["label"]
         
+        # Add default handling
         if branch:
             ivr_node["branch"] = branch
-            ivr_node["getDigits"]["validChoices"] = "|".join(valid_choices)
+            ivr_node["getDigits"]["validChoices"] = "|".join(sorted(valid_choices))
+            # Add error handling
+            if "error" not in branch:
+                branch["error"] = ivr_node["label"]  # Self-reference for retries
         
-        # Add retry logic
-        ivr_node["maxLoop"] = ["Main", 3, "Problems"]
+        # Add retry logic (allflows LITE pattern)
+        ivr_node["maxLoop"] = ["Loop-Main", 3, "Problems"]
 
     def _add_pin_logic_with_mapping(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]):
         """Add PIN entry logic following allflows patterns with proper label mapping"""
         ivr_node["getDigits"] = {
-            "numDigits": 5,  # 4 digits + pound
+            "numDigits": 5,  # 4 digits + pound (allflows LITE pattern)
             "maxTries": 3,
             "maxTime": 7,
-            "validChoices": "{{pin}}",
+            "validChoices": "{{pin}}",  # Dynamic PIN validation
             "errorPrompt": "callflow:1009",
             "nonePrompt": "callflow:1009"
         }
@@ -659,17 +824,20 @@ class DatabaseDrivenIVRConverter:
         if connections:
             branch = {}
             for conn in connections:
-                if 'yes' in conn['label'].lower() or 'correct' in conn['label'].lower():
+                if 'yes' in conn['label'].lower() or 'correct' in conn['label'].lower() or 'valid' in conn['label'].lower():
                     target_id = conn['target']
                     target_label = node_id_to_label.get(target_id, target_id)
                     branch["match"] = target_label
-                elif 'no' in conn['label'].lower() or 'invalid' in conn['label'].lower():
+                elif 'no' in conn['label'].lower() or 'invalid' in conn['label'].lower() or 'retry' in conn['label'].lower():
                     target_id = conn['target']
                     target_label = node_id_to_label.get(target_id, target_id)
                     branch["nomatch"] = target_label
             
             if branch:
                 ivr_node["branch"] = branch
+            
+        # Add retry handling
+        ivr_node["maxLoop"] = ["Loop-PIN", 3, "Problems"]
 
     def _add_availability_logic_with_mapping(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]):
         """Add availability check logic following allflows patterns with proper label mapping"""
@@ -677,7 +845,7 @@ class DatabaseDrivenIVRConverter:
             "numDigits": 1,
             "maxTries": 3,
             "maxTime": 7,
-            "validChoices": "1|3|0",
+            "validChoices": "1|3|0",  # Standard availability choices
             "errorPrompt": "callflow:1009",
             "nonePrompt": "callflow:1009"
         }
@@ -692,31 +860,45 @@ class DatabaseDrivenIVRConverter:
                 branch["1"] = target_label
             elif '3' in label or 'decline' in label:
                 branch["3"] = target_label
-            elif '0' in label or 'call back' in label:
+            elif '0' in label or 'call back' in label or '9' in label:
                 branch["0"] = target_label
+            elif 'invalid' in label or 'retry' in label:
+                branch["error"] = target_label
+        
+        # Add default error handling if not specified
+        if "error" not in branch:
+            branch["error"] = "Invalid Entry"
+        if "timeout" not in branch:
+            branch["timeout"] = "Invalid Entry"
         
         if branch:
             ivr_node["branch"] = branch
         
-        ivr_node["maxLoop"] = ["Loop-A", 3, "Problems"]
+        ivr_node["maxLoop"] = ["Loop-Availability", 3, "Problems"]
 
     def _add_sleep_logic_with_mapping(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]):
         """Add sleep/wait logic following allflows patterns with proper label mapping"""
         ivr_node["getDigits"] = {
             "numDigits": 1,
-            "maxTime": 30,  # 30-second timeout
+            "maxTime": 30,  # 30-second timeout (allflows LITE pattern)
             "validChoices": "1|2|3|4|5|6|7|8|9|0|*|#",
             "errorPrompt": "callflow:1009",
             "nonePrompt": "callflow:1009"
         }
         
-        # Default behavior for any key press
+        # Default behavior for any key press or timeout
         if connections:
             target_id = connections[0]['target']
             target_label = node_id_to_label.get(target_id, target_id)
-            ivr_node["branch"] = {"default": target_label}
+            ivr_node["branch"] = {
+                "next": target_label,
+                "none": target_label  # Same destination for timeout
+            }
         else:
-            ivr_node["goto"] = "Live Answer"
+            ivr_node["branch"] = {
+                "next": "Live Answer",
+                "none": "Live Answer"
+            }
 
     def _add_decision_logic_with_mapping(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]):
         """Add decision logic for multiple choice nodes with proper label mapping"""
@@ -740,18 +922,31 @@ class DatabaseDrivenIVRConverter:
                 target_label = node_id_to_label.get(target_id, target_id)
                 branch[digit] = target_label
                 valid_choices.append(digit)
+            elif 'yes' in conn['label'].lower():
+                target_id = conn['target']
+                target_label = node_id_to_label.get(target_id, target_id)
+                branch["yes"] = target_label
+            elif 'no' in conn['label'].lower():
+                target_id = conn['target']
+                target_label = node_id_to_label.get(target_id, target_id)
+                branch["no"] = target_label
+        
+        # Add error handling
+        if "error" not in branch:
+            branch["error"] = "Invalid Entry"
         
         if branch:
             ivr_node["branch"] = branch
-            ivr_node["getDigits"]["validChoices"] = "|".join(valid_choices)
+            if valid_choices:
+                ivr_node["getDigits"]["validChoices"] = "|".join(valid_choices)
         
-        ivr_node["maxLoop"] = ["Loop-B", 3, "Problems"]
+        ivr_node["maxLoop"] = ["Loop-Decision", 3, "Problems"]
 
     def _add_response_logic(self, ivr_node: Dict[str, Any], label: str, notes: List[str]):
         """Add response handler logic following allflows patterns"""
         label_lower = label.lower()
         
-        # Add gosub for response recording
+        # Add gosub for response recording (allflows LITE pattern)
         if 'accept' in label_lower:
             ivr_node["gosub"] = self.response_codes['accept']
         elif 'decline' in label_lower:
@@ -763,30 +958,59 @@ class DatabaseDrivenIVRConverter:
         else:
             ivr_node["gosub"] = self.response_codes['error']
         
+        # Add nobarge for non-interruptible response messages
+        ivr_node["nobarge"] = "1"
+        
         # Always go to Goodbye after response
         ivr_node["goto"] = "Goodbye"
 
     def _ensure_standard_handlers(self, ivr_nodes: List[Dict[str, Any]], used_labels: Set[str], notes: List[str]):
-        """Ensure standard handler nodes exist"""
+        """Ensure standard handler nodes exist following allflows LITE patterns"""
         existing_labels = {node.get('label') for node in ivr_nodes}
         
         # Add Problems handler if missing
         if 'Problems' not in existing_labels:
             problems_node = {
                 "label": "Problems",
-                "playLog": "I'm sorry you are having problems.",
-                "playPrompt": "callflow:1351",
+                "gosub": self.response_codes['error']
+            }
+            # Add the actual problem message components
+            ivr_nodes.append(problems_node)
+            
+            # Add the message part
+            problems_message = {
+                "nobarge": "1",
+                "playLog": ["I'm sorry you are having problems.", "Please have", "Employee name"],
+                "playPrompt": ["callflow:1351", "callflow:1017", "names:{{contact_id}}"]
+            }
+            ivr_nodes.append(problems_message)
+            
+            # Add call instructions
+            problems_call = {
+                "log": "call the",
+                "playPrompt": "callflow:1174"
+            }
+            ivr_nodes.append(problems_call)
+            
+            # Add final part
+            problems_final = {
+                "nobarge": "1",
+                "playLog": ["APS", "callout system", "at", "speak phone num"],
+                "playPrompt": ["location:{{level2_location}}", "callflow:1290", "callflow:1015", "digits:{{callback_number}}"],
                 "goto": "Goodbye"
             }
-            ivr_nodes.append(problems_node)
-            notes.append("Added Problems handler")
+            ivr_nodes.append(problems_final)
+            
+            notes.append("Added complete Problems handler with multi-object structure")
         
         # Add Goodbye handler if missing
         if 'Goodbye' not in existing_labels:
             goodbye_node = {
                 "label": "Goodbye",
-                "playLog": ["Thank you.", "Goodbye."],
-                "playPrompt": ["callflow:MSG023", "callflow:MSG003"]
+                "log": "Goodbye(1029)",
+                "playPrompt": "callflow:1029",
+                "nobarge": "1",
+                "goto": "hangup"
             }
             ivr_nodes.append(goodbye_node)
             notes.append("Added Goodbye handler")
@@ -796,20 +1020,21 @@ class DatabaseDrivenIVRConverter:
         return [
             {
                 "label": "Live Answer",
-                "playLog": "Welcome message",
+                "log": "Welcome message",
                 "playPrompt": "callflow:Welcome",
                 "goto": "Problems"
             },
             {
                 "label": "Problems",
-                "playLog": "Error handler",
+                "log": "Error handler",
                 "playPrompt": "callflow:1351",
                 "goto": "Goodbye"
             },
             {
                 "label": "Goodbye",
-                "playLog": "Goodbye message",
-                "playPrompt": "callflow:1029"
+                "log": "Goodbye message",
+                "playPrompt": "callflow:1029",
+                "goto": "hangup"
             }
         ]
 
@@ -820,11 +1045,11 @@ def convert_mermaid_to_ivr(mermaid_code: str) -> Tuple[List[Dict[str, Any]], Lis
     return converter.convert(mermaid_code)
 
 
-# Format IVR Output Functions
+# Enhanced Format IVR Output Functions for allflows LITE compatibility
 def format_ivr_output(ivr_nodes: List[Dict[str, Any]]) -> str:
     """
     Format IVR nodes into production-ready JavaScript module.exports format
-    Following the exact structure from allflows examples
+    Enhanced for full allflows LITE compatibility
     """
     if not ivr_nodes:
         return "module.exports = [];"
@@ -836,19 +1061,17 @@ def format_ivr_output(ivr_nodes: List[Dict[str, Any]]) -> str:
         # Ensure all nodes have required fields
         clean_node = {}
         
-        # Property order from allflows: label → playLog → playPrompt → getDigits → branch → maxLoop → gosub → goto → nobarge
+        # Property order from allflows: label → log/playLog → playPrompt → getDigits → branch → maxLoop → gosub → goto → nobarge → guard
         
         # 1. Label (required)
         if 'label' in node:
             clean_node['label'] = node['label']
-        else:
-            clean_node['label'] = 'Unknown'
         
-        # 2. PlayLog (documentation)
+        # 2. Log/PlayLog (documentation)
         if 'playLog' in node:
             clean_node['playLog'] = node['playLog']
         elif 'log' in node:
-            clean_node['playLog'] = node['log']
+            clean_node['log'] = node['log']
         
         # 3. PlayPrompt (voice files)
         if 'playPrompt' in node:
@@ -878,17 +1101,21 @@ def format_ivr_output(ivr_nodes: List[Dict[str, Any]]) -> str:
         if 'nobarge' in node:
             clean_node['nobarge'] = node['nobarge']
         
+        # 10. Guard (conditional execution) - allflows LITE pattern
+        if 'guard' in node:
+            clean_node['guard'] = node['guard']
+        
         # Add any other properties that might be present
         for key, value in node.items():
-            if key not in clean_node and key not in ['log']:  # Skip 'log' as we use 'playLog'
+            if key not in clean_node:
                 clean_node[key] = value
         
         formatted_nodes.append(clean_node)
     
     # Convert to JavaScript format with proper formatting
     try:
-        # Use custom JSON formatting for better JavaScript appearance
-        js_output = _format_as_javascript(formatted_nodes)
+        # Use enhanced JavaScript formatting for allflows LITE compatibility
+        js_output = _format_as_javascript_enhanced(formatted_nodes)
         return f"module.exports = {js_output};"
         
     except Exception as e:
@@ -896,16 +1123,16 @@ def format_ivr_output(ivr_nodes: List[Dict[str, Any]]) -> str:
         json_str = json.dumps(formatted_nodes, indent=2)
         return f"module.exports = {json_str};"
 
-def _format_as_javascript(nodes: List[Dict[str, Any]]) -> str:
-    """Format nodes as JavaScript array with proper indentation"""
+def _format_as_javascript_enhanced(nodes: List[Dict[str, Any]]) -> str:
+    """Enhanced format nodes as JavaScript array with allflows LITE compatibility"""
     lines = ["["]
     
     for i, node in enumerate(nodes):
         lines.append("    {")
         
-        # Format each property
+        # Format each property with enhanced handling
         for j, (key, value) in enumerate(node.items()):
-            formatted_value = _format_js_value(value)
+            formatted_value = _format_js_value_enhanced(value)
             comma = "," if j < len(node) - 1 else ""
             lines.append(f'        {key}: {formatted_value}{comma}')
         
@@ -916,10 +1143,14 @@ def _format_as_javascript(nodes: List[Dict[str, Any]]) -> str:
     
     return "\n".join(lines)
 
-def _format_js_value(value: Any) -> str:
-    """Format a value for JavaScript output"""
+def _format_js_value_enhanced(value: Any) -> str:
+    """Enhanced format a value for JavaScript output with guard function support"""
     if isinstance(value, str):
-        return f'"{value}"'
+        # Special handling for guard functions (allflows LITE pattern)
+        if value.startswith("function"):
+            return value  # Don't quote function definitions
+        else:
+            return f'"{value}"'
     elif isinstance(value, list):
         if not value:
             return "[]"
@@ -932,8 +1163,18 @@ def _format_js_value(value: Any) -> str:
             else:
                 return "[\n            " + ",\n            ".join(formatted_items) + "\n        ]"
         else:
-            # Mixed types - use JSON formatting
-            return json.dumps(value)
+            # Mixed types - use JSON formatting but handle special cases
+            formatted_items = []
+            for item in value:
+                if isinstance(item, str):
+                    formatted_items.append(f'"{item}"')
+                else:
+                    formatted_items.append(str(item))
+            
+            if len(formatted_items) == 1:
+                return f'[{formatted_items[0]}]'
+            else:
+                return "[" + ", ".join(formatted_items) + "]"
     
     elif isinstance(value, dict):
         if not value:
@@ -942,7 +1183,7 @@ def _format_js_value(value: Any) -> str:
         lines = ["{"]
         items = list(value.items())
         for j, (k, v) in enumerate(items):
-            formatted_v = _format_js_value(v)
+            formatted_v = _format_js_value_enhanced(v)
             comma = "," if j < len(items) - 1 else ""
             lines.append(f'            {k}: {formatted_v}{comma}')
         lines.append("        }")
@@ -956,9 +1197,9 @@ def _format_js_value(value: Any) -> str:
     else:
         return str(value)
 
-# Validation function for the generated IVR code
+# Enhanced validation function for the generated IVR code
 def validate_ivr_nodes(ivr_nodes: List[Dict[str, Any]]) -> List[str]:
-    """Validate IVR nodes and return list of issues found"""
+    """Enhanced validate IVR nodes and return list of issues found"""
     issues = []
     labels = set()
     
@@ -994,5 +1235,17 @@ def validate_ivr_nodes(ivr_nodes: List[Dict[str, Any]]) -> List[str]:
                 for field in required_fields:
                     if field not in get_digits:
                         issues.append(f"Node {i}: getDigits missing '{field}' field")
+        
+        # Check gosub structure (allflows LITE pattern)
+        if 'gosub' in node:
+            gosub = node['gosub']
+            if not isinstance(gosub, list) or len(gosub) != 3:
+                issues.append(f"Node {i}: gosub must be array of 3 elements [function, code, description]")
+        
+        # Check guard function syntax
+        if 'guard' in node:
+            guard = node['guard']
+            if not isinstance(guard, str) or not guard.startswith('function'):
+                issues.append(f"Node {i}: guard must be a function string")
     
     return issues
