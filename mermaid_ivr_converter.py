@@ -118,49 +118,108 @@ class ProductionIVRConverter:
                     self.transcript_index[word] = []
                 self.transcript_index[word].append(voice_file)
 
-    def _generate_meaningful_label(self, node_text: str, node_type: NodeType, node_id: str) -> str:
-        """Generate meaningful labels like allflows LITE (NOT A, B, C)"""
-        text_lower = node_text.lower()
+    def _generate_meaningful_label(self, node_text: str, node_type: NodeType, node_id: str, all_nodes: List[Dict] = None) -> str:
+        """Generate meaningful labels like allflows LITE (NOT A, B, C) - IMPROVED"""
         
-        # Welcome/greeting nodes
-        if "welcome" in text_lower or "this is" in text_lower or node_type == NodeType.WELCOME:
-            return "Live Answer"
+        # If we have all_nodes, try to find the actual node text
+        if all_nodes and not node_text:
+            for node in all_nodes:
+                if node['id'] == node_id:
+                    node_text = node['text']
+                    node_type = node['type']
+                    break
         
-        # PIN entry
-        if "pin" in text_lower and ("enter" in text_lower or "type" in text_lower):
-            return "Enter PIN"
+        if node_text:
+            text_lower = node_text.lower()
+            
+            # Welcome/greeting nodes
+            if "welcome" in text_lower or "this is" in text_lower or node_type == NodeType.WELCOME:
+                return "Live Answer"
+            
+            # PIN entry
+            if "pin" in text_lower and ("enter" in text_lower or "type" in text_lower or "digits" in text_lower):
+                return "Enter PIN"
+            
+            # Availability questions
+            if "available" in text_lower and "work" in text_lower:
+                return "Available For Callout"
+            
+            # Response actions
+            if "accept" in text_lower and "response" in text_lower:
+                return "Accept"
+            elif "decline" in text_lower:
+                return "Decline"
+            elif "not home" in text_lower:
+                return "Not Home"
+            elif "qualified" in text_lower:
+                return "Qualified No"
+            
+            # Sleep/wait
+            if ("more time" in text_lower or "continue" in text_lower or "press any key" in text_lower) and "message" in text_lower:
+                return "Sleep"
+            
+            # Goodbye
+            if "goodbye" in text_lower or ("thank you" in text_lower and "goodbye" in text_lower):
+                return "Goodbye"
+            elif "disconnect" in text_lower:
+                return "Disconnect"
+            
+            # Error/problems
+            if "invalid" in text_lower and "entry" in text_lower:
+                return "Invalid Entry"
+            elif "problem" in text_lower or "error" in text_lower:
+                return "Problems"
+            
+            # Callout information nodes
+            if "electric callout" in text_lower:
+                return "Electric Callout"
+            elif "callout reason" in text_lower:
+                return "Callout Reason"
+            elif "trouble location" in text_lower:
+                return "Trouble Location"
+            elif "custom message" in text_lower:
+                return "Custom Message"
+            
+            # Decision nodes (short questions)
+            if node_type == NodeType.DECISION or "?" in node_text:
+                if "correct" in text_lower and "pin" in text_lower:
+                    return "Check PIN"
+                elif "this is employee" in text_lower or "employee" in text_lower:
+                    return "Verify Employee"
+                elif len(node_text.split()) <= 3:
+                    return node_text.title()
+            
+            # Fallback: Generate from first few words
+            words = re.findall(r'\b[A-Za-z]+\b', node_text)
+            if words:
+                # Take first 2-3 meaningful words
+                meaningful_words = [w for w in words[:3] if len(w) > 2 and w.lower() not in ['the', 'and', 'for', 'you', 'this', 'that']]
+                if meaningful_words:
+                    return ' '.join(word.capitalize() for word in meaningful_words)
         
-        # Availability questions
-        if "available" in text_lower and "work" in text_lower:
-            return "Available For Callout"
-        
-        # Response actions
-        if "accept" in text_lower or ("press" in text_lower and "1" in text_lower):
-            return "Accept"
-        elif "decline" in text_lower or ("press" in text_lower and "3" in text_lower):
-            return "Decline"
-        elif "not home" in text_lower or ("press" in text_lower and "7" in text_lower):
-            return "Not Home"
-        
-        # Sleep/wait
-        if "time" in text_lower and ("more" in text_lower or "wait" in text_lower):
-            return "Sleep"
-        
-        # Goodbye
-        if "goodbye" in text_lower or "thank you" in text_lower:
-            return "Goodbye"
-        
-        # Error/problems
-        if "problem" in text_lower or "error" in text_lower or "invalid" in text_lower:
-            return "Problems"
-        
-        # Fallback: Generate from first few words
-        words = re.findall(r'\b[A-Za-z]+\b', node_text)
-        if words:
-            # Take first 2-3 meaningful words
-            meaningful_words = [w for w in words[:3] if len(w) > 2]
-            if meaningful_words:
-                return ' '.join(word.capitalize() for word in meaningful_words)
+        # Fallback based on node ID patterns
+        if node_id:
+            id_mapping = {
+                'A': 'Live Answer',
+                'B': 'Verify Employee', 
+                'C': 'Sleep',
+                'D': 'Not Home',
+                'E': 'Check Input',
+                'F': 'Invalid Entry',
+                'G': 'Check PIN',
+                'H': 'Electric Callout',
+                'I': 'Callout Reason',
+                'J': 'Trouble Location',
+                'K': 'Custom Message',
+                'L': 'Available For Callout',
+                'M': 'Accept',
+                'N': 'Decline',
+                'O': 'Qualified No',
+                'P': 'Goodbye',
+                'Q': 'Disconnect'
+            }
+            if node_id in id_mapping:
+                return id_mapping[node_id]
         
         # Last resort: Use node type
         return f"{node_type.value.replace('_', ' ').title()} {node_id}"
@@ -330,45 +389,74 @@ class ProductionIVRConverter:
         return play_log, play_prompt
 
     def _parse_mermaid_diagram(self, mermaid_code: str) -> Tuple[List[Dict], List[Dict]]:
-        """Parse Mermaid diagram into nodes and connections"""
+        """Parse Mermaid diagram into nodes and connections - FIXED PARSING"""
         lines = [line.strip() for line in mermaid_code.split('\n') if line.strip()]
         
         nodes = []
         connections = []
         node_texts = {}
         
-        # Extract node definitions
-        for line in lines:
-            if line.startswith('flowchart') or line.startswith('%%') or '-->' in line:
-                continue
-            
-            # Parse node definitions with quotes
-            if '"' in line:
-                # Extract node ID and text
-                match = re.match(r'([A-Z]+)\s*[\[{]?\s*"([^"]+)"', line)
-                if match:
-                    node_id, node_text = match.groups()
-                    # Clean HTML tags
-                    node_text = re.sub(r'<br\s*/?>', ' ', node_text)
-                    node_text = re.sub(r'<[^>]+>', '', node_text)
-                    node_texts[node_id] = node_text.strip()
+        # Join all lines to handle multiline node definitions
+        full_text = ' '.join(lines)
         
-        # Extract connections
+        # Extract node definitions with better regex patterns
+        # Pattern for rectangular nodes: A["text content"]
+        rect_pattern = r'([A-Z]+)\s*\[\s*"([^"]+)"\s*\]'
+        # Pattern for diamond nodes: A{"text content"}  
+        diamond_pattern = r'([A-Z]+)\s*\{\s*"([^"]+)"\s*\}'
+        
+        # Find all rectangular nodes
+        for match in re.finditer(rect_pattern, full_text):
+            node_id, node_text = match.groups()
+            # Clean HTML tags and normalize
+            node_text = re.sub(r'<br\s*/?>', ' ', node_text)
+            node_text = re.sub(r'<[^>]+>', '', node_text)
+            node_text = re.sub(r'\s+', ' ', node_text).strip()
+            node_texts[node_id] = node_text
+            print(f"📦 Found rectangular node: {node_id} = '{node_text[:50]}...'")
+        
+        # Find all diamond nodes (decisions)
+        for match in re.finditer(diamond_pattern, full_text):
+            node_id, node_text = match.groups()
+            # Clean HTML tags and normalize
+            node_text = re.sub(r'<br\s*/?>', ' ', node_text)
+            node_text = re.sub(r'<[^>]+>', '', node_text)
+            node_text = re.sub(r'\s+', ' ', node_text).strip()
+            node_texts[node_id] = node_text
+            print(f"💎 Found diamond node: {node_id} = '{node_text[:50]}...'")
+        
+        # Extract connections with improved parsing
+        # Handle both quoted and unquoted labels
+        connection_patterns = [
+            r'([A-Z]+)\s*-->\s*\|"([^"]+)"\|\s*([A-Z]+)',  # |"quoted label"|
+            r'([A-Z]+)\s*-->\s*\|([^|]+)\|\s*([A-Z]+)',    # |unquoted label|
+            r'([A-Z]+)\s*-->\s*([A-Z]+)'                   # direct connection
+        ]
+        
         for line in lines:
             if '-->' in line:
-                # Parse connection with optional label
-                match = re.match(r'([A-Z]+)\s*-->\s*(?:\|"([^"]+)"\|\s*)?([A-Z]+)', line)
-                if match:
-                    source, label, target = match.groups()
-                    connections.append({
-                        'source': source,
-                        'target': target,
-                        'label': label or ''
-                    })
+                # Try each pattern
+                for pattern in connection_patterns:
+                    match = re.search(pattern, line)
+                    if match:
+                        groups = match.groups()
+                        if len(groups) == 3:
+                            source, label, target = groups
+                        else:
+                            source, target = groups
+                            label = ''
+                        
+                        connections.append({
+                            'source': source,
+                            'target': target,
+                            'label': label.strip() if label else ''
+                        })
+                        print(f"🔗 Found connection: {source} -> {target} ('{label}')")
+                        break  # Found a match, stop trying other patterns
         
         # Create node objects
         for node_id, text in node_texts.items():
-            # Determine node type from content
+            # Determine node type from content and shape
             node_type = self._determine_node_type(text)
             
             nodes.append({
@@ -377,30 +465,49 @@ class ProductionIVRConverter:
                 'type': node_type
             })
         
+        print(f"✅ Parsed {len(nodes)} nodes and {len(connections)} connections")
         return nodes, connections
 
     def _determine_node_type(self, text: str) -> NodeType:
-        """Determine node type from text content"""
+        """Determine node type from text content - IMPROVED DETECTION"""
         text_lower = text.lower()
         
-        if "welcome" in text_lower or "this is" in text_lower:
+        # Welcome nodes - typically first nodes with greeting
+        if any(phrase in text_lower for phrase in ["welcome", "this is an", "this is a", "automated"]):
             return NodeType.WELCOME
-        elif "pin" in text_lower:
+        
+        # PIN entry nodes
+        if any(phrase in text_lower for phrase in ["pin", "enter", "digits"]) and not "invalid" in text_lower:
             return NodeType.PIN_ENTRY
-        elif "available" in text_lower and "?" in text:
+        
+        # Availability questions - specific pattern
+        if "available" in text_lower and any(phrase in text_lower for phrase in ["work", "callout", "press 1", "press 3"]):
             return NodeType.AVAILABILITY
-        elif "accept" in text_lower or "decline" in text_lower:
+        
+        # Response/action nodes
+        if any(phrase in text_lower for phrase in ["accepted", "decline", "response", "recorded"]):
             return NodeType.RESPONSE
-        elif "goodbye" in text_lower or "thank you" in text_lower:
+        
+        # Goodbye/disconnect nodes
+        if any(phrase in text_lower for phrase in ["goodbye", "thank you", "disconnect"]):
             return NodeType.GOODBYE
-        elif "problem" in text_lower or "error" in text_lower:
+        
+        # Error/problem nodes
+        if any(phrase in text_lower for phrase in ["invalid", "error", "problem", "try again"]):
             return NodeType.ERROR
-        elif "?" in text:
+        
+        # Sleep/wait nodes
+        if any(phrase in text_lower for phrase in ["more time", "continue", "press any key"]):
+            return NodeType.SLEEP
+        
+        # Decision nodes - contain questions or simple yes/no choices
+        if any(phrase in text_lower for phrase in ["?", "yes", "no", "correct"]) or len(text.split()) <= 5:
             return NodeType.DECISION
-        else:
-            return NodeType.ACTION
+        
+        # Default to action
+        return NodeType.ACTION
 
-    def _create_ivr_node(self, node: Dict, connections: List[Dict], label: str) -> Dict[str, Any]:
+    def _create_ivr_node(self, node: Dict, connections: List[Dict], label: str, node_id_to_label: Dict[str, str] = None) -> Dict[str, Any]:
         """Create IVR node following allflows LITE patterns"""
         text = node['text']
         node_type = node['type']
@@ -431,22 +538,26 @@ class ProductionIVRConverter:
         
         # Add interaction logic based on node type
         if node_type in [NodeType.WELCOME, NodeType.AVAILABILITY, NodeType.DECISION]:
-            self._add_input_logic(ivr_node, connections, node)
+            self._add_input_logic(ivr_node, connections, node, node_id_to_label)
         elif node_type == NodeType.RESPONSE:
             self._add_response_logic(ivr_node, label)
         elif len(connections) == 1:
             # Simple goto
-            target_label = self._generate_meaningful_label("", NodeType.ACTION, connections[0]['target'])
+            target_id = connections[0]['target']
+            if node_id_to_label and target_id in node_id_to_label:
+                target_label = node_id_to_label[target_id]
+            else:
+                target_label = self._generate_meaningful_label("", NodeType.ACTION, target_id)
             ivr_node['goto'] = target_label
         
         return ivr_node
 
-    def _add_input_logic(self, ivr_node: Dict, connections: List[Dict], node: Dict):
-        """Add getDigits and branch logic"""
+    def _add_input_logic(self, ivr_node: Dict, connections: List[Dict], node: Dict, node_id_to_label: Dict[str, str] = None):
+        """Add getDigits and branch logic - IMPROVED LABEL PARSING"""
         if not connections:
             return
         
-        # Determine valid choices from connection labels
+        # Determine valid choices from connection labels with better parsing
         valid_choices = []
         branch_map = {}
         
@@ -454,36 +565,72 @@ class ProductionIVRConverter:
             label = conn.get('label', '').lower()
             target = conn['target']
             
-            if '1' in label:
+            # Use the pre-computed label if available
+            if node_id_to_label and target in node_id_to_label:
+                target_label = node_id_to_label[target]
+            else:
+                target_label = self._generate_meaningful_label("", NodeType.ACTION, target)
+            
+            print(f"🔀 Processing connection label: '{label}' -> {target} ({target_label})")
+            
+            # Extract digit from various label formats
+            if re.search(r'\b1\b', label) or 'press 1' in label:
                 valid_choices.append('1')
-                branch_map['1'] = self._generate_meaningful_label("", NodeType.ACTION, target)
-            elif '3' in label:
+                branch_map['1'] = target_label
+            elif re.search(r'\b3\b', label) or 'press 3' in label:
                 valid_choices.append('3')
-                branch_map['3'] = self._generate_meaningful_label("", NodeType.ACTION, target)
-            elif '7' in label:
+                branch_map['3'] = target_label
+            elif re.search(r'\b7\b', label) or 'press 7' in label:
                 valid_choices.append('7')
-                branch_map['7'] = self._generate_meaningful_label("", NodeType.ACTION, target)
-            elif '9' in label:
+                branch_map['7'] = target_label
+            elif re.search(r'\b9\b', label) or 'press 9' in label:
                 valid_choices.append('9')
-                branch_map['9'] = self._generate_meaningful_label("", NodeType.ACTION, target)
-            elif 'no input' in label:
-                branch_map['none'] = self._generate_meaningful_label("", NodeType.ACTION, target)
+                branch_map['9'] = target_label
+            elif re.search(r'\b0\b', label) or 'press 0' in label:
+                valid_choices.append('0')
+                branch_map['0'] = target_label
+            elif any(phrase in label for phrase in ['no input', 'timeout', 'none']):
+                branch_map['none'] = target_label
+            elif any(phrase in label for phrase in ['invalid', 'error', 'retry']):
+                branch_map['error'] = target_label
+            elif any(phrase in label for phrase in ['yes', 'correct']):
+                branch_map['yes'] = target_label  # For yes/no decisions
+            elif any(phrase in label for phrase in ['no', 'incorrect']):
+                branch_map['no'] = target_label   # For yes/no decisions
+            else:
+                # Default connection or self-loop
+                if conn['source'] == conn['target']:
+                    # Self-loop for retry
+                    continue
+                else:
+                    # Direct connection without input
+                    if not branch_map:
+                        ivr_node['goto'] = target_label
+                        return
         
+        # Add getDigits configuration
         if valid_choices:
             ivr_node['getDigits'] = {
                 'numDigits': 1,
                 'maxTime': 7,
-                'validChoices': '|'.join(valid_choices),
+                'validChoices': '|'.join(sorted(set(valid_choices))),
                 'errorPrompt': 'callflow:1009'
             }
             
-            if branch_map:
-                # Add error handling
+            # Add error handling if not already specified
+            if 'error' not in branch_map:
                 branch_map['error'] = 'Problems'
-                if 'none' not in branch_map:
-                    branch_map['none'] = 'Problems'
-                
-                ivr_node['branch'] = branch_map
+            if 'none' not in branch_map and 'timeout' not in branch_map:
+                branch_map['none'] = 'Problems'
+            
+            ivr_node['branch'] = branch_map
+            print(f"✅ Added input logic: choices={valid_choices}, branches={branch_map}")
+        elif branch_map:
+            # Yes/no style decision without numeric input
+            ivr_node['branch'] = branch_map
+            print(f"✅ Added decision logic: branches={branch_map}")
+        else:
+            print(f"⚠️ No input logic detected for connections: {[c['label'] for c in connections]}")
 
     def _add_response_logic(self, ivr_node: Dict, label: str):
         """Add gosub for response handling like allflows LITE"""
@@ -497,39 +644,83 @@ class ProductionIVRConverter:
             ivr_node['goto'] = 'Goodbye'
 
     def convert_mermaid_to_ivr(self, mermaid_code: str) -> Tuple[List[Dict[str, Any]], List[str]]:
-        """Main conversion method - PRODUCTION READY"""
+        """Main conversion method - PRODUCTION READY WITH DEBUGGING"""
         notes = []
         
         try:
+            print(f"🚀 Starting conversion of Mermaid diagram...")
+            print(f"📝 Input length: {len(mermaid_code)} characters")
+            
             # Parse Mermaid diagram
             nodes, connections = self._parse_mermaid_diagram(mermaid_code)
             notes.append(f"Parsed {len(nodes)} nodes and {len(connections)} connections")
             
             if not nodes:
-                notes.append("No nodes found in diagram")
+                notes.append("❌ No nodes found in diagram - check Mermaid syntax")
+                print("❌ PARSING FAILED - No nodes extracted")
+                print("📋 Input preview:")
+                for i, line in enumerate(mermaid_code.split('\n')[:10]):
+                    print(f"  {i+1}: {line}")
                 return self._create_fallback_flow(), notes
+            
+            print(f"✅ Successfully parsed {len(nodes)} nodes")
+            
+            # Create a mapping of node IDs to meaningful labels
+            node_id_to_label = {}
+            for node in nodes:
+                label = self._generate_meaningful_label(node['text'], node['type'], node['id'], nodes)
+                node_id_to_label[node['id']] = label
+                print(f"🏷️ {node['id']} -> '{label}' ({node['type'].value})")
             
             # Generate IVR nodes with meaningful labels
             ivr_nodes = []
             
             for node in nodes:
-                # Generate meaningful label (NOT A, B, C)
-                label = self._generate_meaningful_label(node['text'], node['type'], node['id'])
+                print(f"\n🔄 Processing node {node['id']}: {node['text'][:50]}...")
+                
+                # Get the meaningful label
+                label = node_id_to_label[node['id']]
                 
                 # Get connections for this node
                 node_connections = [c for c in connections if c['source'] == node['id']]
+                print(f"🔗 Found {len(node_connections)} outgoing connections")
                 
-                # Create IVR node
-                ivr_node = self._create_ivr_node(node, node_connections, label)
+                # Create IVR node with node mapping for better branch labels
+                ivr_node = self._create_ivr_node(node, node_connections, label, node_id_to_label)
                 ivr_nodes.append(ivr_node)
                 
                 notes.append(f"Generated node: {label}")
+                print(f"✅ Generated IVR node: {label}")
+            
+            # Add standard termination nodes if not present
+            if not any(node.get('label') == 'Problems' for node in ivr_nodes):
+                ivr_nodes.append({
+                    'label': 'Problems',
+                    'log': 'Error handler - invalid input or system error',
+                    'playPrompt': 'callflow:1351',
+                    'goto': 'Goodbye'
+                })
+                notes.append("Added standard 'Problems' error handler")
+            
+            if not any(node.get('label') == 'Goodbye' for node in ivr_nodes):
+                ivr_nodes.append({
+                    'label': 'Goodbye',
+                    'log': 'Thank you goodbye',
+                    'playPrompt': 'callflow:1029'
+                })
+                notes.append("Added standard 'Goodbye' termination")
             
             notes.append(f"✅ Generated {len(ivr_nodes)} production-ready IVR nodes")
+            print(f"🎉 CONVERSION SUCCESSFUL - Generated {len(ivr_nodes)} nodes")
+            
             return ivr_nodes, notes
             
         except Exception as e:
-            notes.append(f"❌ Conversion failed: {str(e)}")
+            error_msg = f"❌ Conversion failed: {str(e)}"
+            notes.append(error_msg)
+            print(error_msg)
+            import traceback
+            traceback.print_exc()
             return self._create_fallback_flow(), notes
 
     def _create_fallback_flow(self) -> List[Dict[str, Any]]:
