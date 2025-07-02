@@ -126,13 +126,45 @@ class ProductionIVRConverter:
         
         print(f"\n📈 SUMMARY: Found {len(found_phrases)}/{len(common_phrases)} common phrases")
         
-        # Show some random samples from the database
-        import random
-        if len(self.voice_files) > 10:
-            print(f"\n📝 RANDOM SAMPLES:")
-            samples = random.sample(self.voice_files, min(10, len(self.voice_files)))
-            for i, sample in enumerate(samples, 1):
-                print(f"  {i}. '{sample.transcript}' -> {sample.callflow_id} ({sample.folder})")
+        # Show transcript length distribution to understand if we have words vs letters
+        length_distribution = {}
+        single_letters = []
+        complete_words = []
+        phrases = []
+        
+        for vf in self.voice_files:
+            transcript_len = len(vf.transcript.strip())
+            length_distribution[transcript_len] = length_distribution.get(transcript_len, 0) + 1
+            
+            if transcript_len == 1:
+                single_letters.append(f"'{vf.transcript}' -> {vf.callflow_id}")
+            elif transcript_len <= 10:
+                complete_words.append(f"'{vf.transcript}' -> {vf.callflow_id}")
+            else:
+                phrases.append(f"'{vf.transcript}' -> {vf.callflow_id}")
+        
+        print(f"\n📏 TRANSCRIPT LENGTH ANALYSIS:")
+        for length in sorted(length_distribution.keys()):
+            count = length_distribution[length]
+            print(f"  {length} chars: {count} files")
+        
+        print(f"\n🔤 SINGLE LETTERS ({len(single_letters)} files):")
+        for i, letter in enumerate(single_letters[:10]):  # Show first 10
+            print(f"  {letter}")
+        if len(single_letters) > 10:
+            print(f"  ... and {len(single_letters) - 10} more")
+        
+        print(f"\n📝 COMPLETE WORDS ({len(complete_words)} files):")
+        for i, word in enumerate(complete_words[:10]):  # Show first 10
+            print(f"  {word}")
+        if len(complete_words) > 10:
+            print(f"  ... and {len(complete_words) - 10} more")
+        
+        print(f"\n📄 PHRASES ({len(phrases)} files):")
+        for i, phrase in enumerate(phrases[:10]):  # Show first 10
+            print(f"  {phrase}")
+        if len(phrases) > 10:
+            print(f"  ... and {len(phrases) - 10} more")
         
         # Show folder distribution
         folder_counts = {}
@@ -473,7 +505,7 @@ class ProductionIVRConverter:
         return best_match
 
     def _segment_text_like_andres(self, text: str, variables: Dict[str, str]) -> List[str]:
-        """Segment text like Andres manually does - IMPROVED PHRASE MATCHING"""
+        """Segment text like Andres manually does - FIXED TO PREFER COMPLETE WORDS"""
         # Replace variables first
         processed_text = text
         for var_placeholder, var_replacement in variables.items():
@@ -488,57 +520,552 @@ class ProductionIVRConverter:
         segments = []
         remaining_text = processed_text
         
-        # Try longer phrases first (Andres's approach - find longest matches)
+        # PRIORITY ORDER: Long phrases → Complete words → Avoid single letters
         while remaining_text and len(segments) < 20:  # Safety limit
             found_match = False
-            best_match = None
-            best_length = 0
             
-            # Try to find the longest possible match starting from the beginning
-            for voice_file in self.voice_files:
-                transcript = voice_file.transcript.strip()
-                if remaining_text.lower().startswith(transcript.lower()):
-                    if len(transcript) > best_length:
-                        best_match = voice_file
-                        best_length = len(transcript)
+            # STEP 1: Try common complete phrases first
+            common_phrases = [
+                "this is an electric callout", "this is an", "this is a", 
+                "electric callout", "callout reason", "trouble location",
+                "thank you goodbye", "thank you", "goodbye", 
+                "press 1", "press 3", "press 7", "press 9",
+                "invalid entry", "please try again", "you may be called",
+                "response has been recorded", "if yes", "if no",
+                "are you available", "available to work", "work this callout",
+                "accepted response", "callout decline", "qualified no",
+                "employee not home", "press any key", "30-second message"
+            ]
             
-            if best_match:
-                match_text = remaining_text[:best_length]
-                segments.append(match_text)
-                remaining_text = remaining_text[best_length:].strip()
-                # Remove punctuation at the start
-                remaining_text = re.sub(r'^[.,;:!\?]\s*', '', remaining_text)
-                found_match = True
-                print(f"✅ Found match: '{match_text}' -> {best_match.callflow_id}")
+            for phrase in common_phrases:
+                if remaining_text.lower().startswith(phrase.lower()):
+                    segments.append(phrase)
+                    remaining_text = remaining_text[len(phrase):].strip()
+                    remaining_text = re.sub(r'^[.,;:!\?]\s*', '', remaining_text)
+                    found_match = True
+                    print(f"🎯 Common phrase match: '{phrase}'")
+                    break
             
             if not found_match:
-                # Try common phrase patterns before falling back to single words
-                common_phrases = [
-                    "this is an", "this is a", "thank you", "goodbye", 
-                    "press 1", "press 3", "press 7", "press 9",
-                    "electric callout", "callout reason", "trouble location",
-                    "invalid entry", "please try again", "you may be called",
-                    "response has been recorded", "if yes", "if no"
-                ]
+                # STEP 2: Look for complete words in database (minimum 3 characters)
+                best_match = None
+                best_length = 0
                 
-                for phrase in common_phrases:
-                    if remaining_text.lower().startswith(phrase):
-                        segments.append(phrase)
-                        remaining_text = remaining_text[len(phrase):].strip()
-                        remaining_text = re.sub(r'^[.,;:!\?]\s*', '', remaining_text)
-                        found_match = True
-                        print(f"📝 Common phrase: '{phrase}'")
-                        break
+                for voice_file in self.voice_files:
+                    transcript = voice_file.transcript.strip()
+                    # ONLY consider matches of 3+ characters to avoid single letters
+                    if (len(transcript) >= 3 and 
+                        remaining_text.lower().startswith(transcript.lower())):
+                        if len(transcript) > best_length:
+                            best_match = voice_file
+                            best_length = len(transcript)
                 
-                if not found_match:
-                    # Take the first word and continue
-                    words = remaining_text.split()
-                    if words:
-                        segments.append(words[0])
-                        remaining_text = ' '.join(words[1:])
-                        print(f"📝 Single word: '{words[0]}'")
+                if best_match:
+                    match_text = remaining_text[:best_length]
+                    segments.append(match_text)
+                    remaining_text = remaining_text[best_length:].strip()
+                    remaining_text = re.sub(r'^[.,;:!\?]\s*', '', remaining_text)
+                    found_match = True
+                    print(f"✅ Database word match: '{match_text}' -> {best_match.callflow_id}")
+            
+            if not found_match:
+                # STEP 3: Take complete words (avoid breaking into letters)
+                words = remaining_text.split()
+                if words:
+                    first_word = words[0]
+                    # Remove punctuation from the word
+                    clean_word = re.sub(r'[.,;:!\?]
+
+    def _generate_voice_prompts(self, segments: List[str], variables: Dict[str, str]) -> Tuple[List[str], List[str]]:
+        """Generate playLog and playPrompt arrays using real database - FIXED TO AVOID OVER-SEGMENTATION"""
+        play_log = []
+        play_prompt = []
+        
+        print(f"🎵 Generating voice prompts for segments: {segments}")
+        
+        for segment in segments:
+            if not segment.strip():
+                continue
+            
+            # Handle variables
+            if any(var in segment for var in variables.values()):
+                print(f"🔧 Processing variable segment: '{segment}'")
+                # Special variable handling like allflows LITE
+                if '{{contact_id}}' in segment:
+                    play_log.append("Employee name spoken")
+                    play_prompt.append("names:{{contact_id}}")
+                elif '{{level2_location}}' in segment or '{{callout_location}}' in segment:
+                    play_log.append("location")
+                    play_prompt.append(f"location:{segment.replace('.', '')}")
+                elif '{{callout_type}}' in segment:
+                    play_log.append("type")
+                    play_prompt.append("type:{{callout_type}}")
+                elif '{{callout_reason}}' in segment:
+                    play_log.append("reason")
+                    play_prompt.append("reason:{{callout_reason}}")
+                elif '{{custom_message}}' in segment:
+                    play_log.append("custom message")
+                    play_prompt.append("custom:{{custom_message}}")
+                else:
+                    play_log.append(segment)
+                    play_prompt.append(segment)
+            else:
+                # Look up in real database with improved matching
+                voice_match = self._find_voice_file_match(segment)
+                if voice_match:
+                    play_log.append(segment)
+                    
+                    # Generate proper voice reference based on folder
+                    if voice_match.folder == "company":
+                        prompt_ref = f"company:{voice_match.callflow_id}"
+                    elif voice_match.folder == "standard":
+                        prompt_ref = f"standard:{voice_match.callflow_id}"
+                    elif voice_match.folder in ["location", "reason", "type"]:
+                        prompt_ref = f"{voice_match.folder}:{voice_match.callflow_id}"
                     else:
-                        break
+                        prompt_ref = f"callflow:{voice_match.callflow_id}"
+                    
+                    play_prompt.append(prompt_ref)
+                    print(f"✅ Database match: '{segment}' -> {prompt_ref}")
+                else:
+                    # No match - use smart fallbacks for common words
+                    play_log.append(segment)
+                    
+                    # Enhanced smart fallbacks for complete words
+                    smart_fallbacks = {
+                        # Common IVR words
+                        "electric": "type:electric",
+                        "callout": "callflow:1274",
+                        "please": "callflow:PLEASE",
+                        "thank": "callflow:THANK",
+                        "you": "callflow:YOU", 
+                        "goodbye": "callflow:GOODBYE",
+                        "welcome": "callflow:WELCOME",
+                        "this": "callflow:THIS",
+                        "is": "callflow:IS",
+                        "an": "callflow:AN",
+                        "from": "callflow:FROM",
+                        "available": "callflow:AVAILABLE",
+                        "work": "callflow:WORK",
+                        "response": "callflow:RESPONSE",
+                        "recorded": "callflow:RECORDED",
+                        "invalid": "callflow:INVALID",
+                        "entry": "callflow:ENTRY",
+                        "again": "callflow:AGAIN",
+                        "reason": "callflow:REASON",
+                        "location": "callflow:LOCATION",
+                        "trouble": "callflow:TROUBLE",
+                        "system": "callflow:SYSTEM",
+                        "employee": "callflow:EMPLOYEE",
+                        "home": "callflow:HOME",
+                        "call": "callflow:CALL",
+                        "have": "callflow:HAVE",
+                        "may": "callflow:MAY",
+                        "called": "callflow:CALLED",
+                        "accepted": "callflow:ACCEPTED",
+                        "decline": "callflow:DECLINE",
+                        "qualified": "callflow:QUALIFIED",
+                        # Complete phrases
+                        "this is an": "callflow:1677",
+                        "thank you": "callflow:THANKYOU",
+                        "press 1": "standard:PRS1NEU",
+                        "press 3": "standard:PRS3NEU", 
+                        "press 7": "standard:PRS7NEU",
+                        "press 9": "standard:PRS9NEU",
+                        "invalid entry": "callflow:1009",
+                        "please try again": "callflow:TRYAGAIN",
+                        "electric callout": "type:electric",
+                        "callout reason": "callflow:CALLOUTREASON",
+                        "trouble location": "callflow:TROUBLELOCATION",
+                        "thank you goodbye": "callflow:THANKYOUGOODBYE",
+                        "press any key": "callflow:1265"
+                    }
+                    
+                    segment_lower = segment.lower()
+                    if segment_lower in smart_fallbacks:
+                        prompt_ref = smart_fallbacks[segment_lower]
+                        play_prompt.append(prompt_ref)
+                        print(f"🎯 Smart fallback: '{segment}' -> {prompt_ref}")
+                    else:
+                        play_prompt.append(f"NEW_VOICE_NEEDED:{segment}")
+                        print(f"❓ No match found: '{segment}' -> needs new voice file")
+        
+        print(f"🎵 Generated prompts: log={len(play_log)}, prompt={len(play_prompt)}")
+        return play_log, play_prompt
+
+    def _parse_mermaid_diagram(self, mermaid_code: str) -> Tuple[List[Dict], List[Dict]]:
+        """Parse Mermaid diagram into nodes and connections - FIXED PARSING"""
+        lines = [line.strip() for line in mermaid_code.split('\n') if line.strip()]
+        
+        nodes = []
+        connections = []
+        node_texts = {}
+        
+        # Join all lines to handle multiline node definitions
+        full_text = ' '.join(lines)
+        
+        # Extract node definitions with better regex patterns
+        # Pattern for rectangular nodes: A["text content"]
+        rect_pattern = r'([A-Z]+)\s*\[\s*"([^"]+)"\s*\]'
+        # Pattern for diamond nodes: A{"text content"}  
+        diamond_pattern = r'([A-Z]+)\s*\{\s*"([^"]+)"\s*\}'
+        
+        # Find all rectangular nodes
+        for match in re.finditer(rect_pattern, full_text):
+            node_id, node_text = match.groups()
+            # Clean HTML tags and normalize
+            node_text = re.sub(r'<br\s*/?>', ' ', node_text)
+            node_text = re.sub(r'<[^>]+>', '', node_text)
+            node_text = re.sub(r'\s+', ' ', node_text).strip()
+            node_texts[node_id] = node_text
+            print(f"📦 Found rectangular node: {node_id} = '{node_text[:50]}...'")
+        
+        # Find all diamond nodes (decisions)
+        for match in re.finditer(diamond_pattern, full_text):
+            node_id, node_text = match.groups()
+            # Clean HTML tags and normalize
+            node_text = re.sub(r'<br\s*/?>', ' ', node_text)
+            node_text = re.sub(r'<[^>]+>', '', node_text)
+            node_text = re.sub(r'\s+', ' ', node_text).strip()
+            node_texts[node_id] = node_text
+            print(f"💎 Found diamond node: {node_id} = '{node_text[:50]}...'")
+        
+        # Extract connections with improved parsing
+        # Handle both quoted and unquoted labels
+        connection_patterns = [
+            r'([A-Z]+)\s*-->\s*\|"([^"]+)"\|\s*([A-Z]+)',  # |"quoted label"|
+            r'([A-Z]+)\s*-->\s*\|([^|]+)\|\s*([A-Z]+)',    # |unquoted label|
+            r'([A-Z]+)\s*-->\s*([A-Z]+)'                   # direct connection
+        ]
+        
+        for line in lines:
+            if '-->' in line:
+                # Try each pattern
+                for pattern in connection_patterns:
+                    match = re.search(pattern, line)
+                    if match:
+                        groups = match.groups()
+                        if len(groups) == 3:
+                            source, label, target = groups
+                        else:
+                            source, target = groups
+                            label = ''
+                        
+                        connections.append({
+                            'source': source,
+                            'target': target,
+                            'label': label.strip() if label else ''
+                        })
+                        print(f"🔗 Found connection: {source} -> {target} ('{label}')")
+                        break  # Found a match, stop trying other patterns
+        
+        # Create node objects
+        for node_id, text in node_texts.items():
+            # Determine node type from content and shape
+            node_type = self._determine_node_type(text)
+            
+            nodes.append({
+                'id': node_id,
+                'text': text,
+                'type': node_type
+            })
+        
+        print(f"✅ Parsed {len(nodes)} nodes and {len(connections)} connections")
+        return nodes, connections
+
+    def _determine_node_type(self, text: str) -> NodeType:
+        """Determine node type from text content - IMPROVED DETECTION"""
+        text_lower = text.lower()
+        
+        # Welcome nodes - typically first nodes with greeting
+        if any(phrase in text_lower for phrase in ["welcome", "this is an", "this is a", "automated"]):
+            return NodeType.WELCOME
+        
+        # PIN entry nodes
+        if any(phrase in text_lower for phrase in ["pin", "enter", "digits"]) and not "invalid" in text_lower:
+            return NodeType.PIN_ENTRY
+        
+        # Availability questions - specific pattern
+        if "available" in text_lower and any(phrase in text_lower for phrase in ["work", "callout", "press 1", "press 3"]):
+            return NodeType.AVAILABILITY
+        
+        # Response/action nodes
+        if any(phrase in text_lower for phrase in ["accepted", "decline", "response", "recorded"]):
+            return NodeType.RESPONSE
+        
+        # Goodbye/disconnect nodes
+        if any(phrase in text_lower for phrase in ["goodbye", "thank you", "disconnect"]):
+            return NodeType.GOODBYE
+        
+        # Error/problem nodes
+        if any(phrase in text_lower for phrase in ["invalid", "error", "problem", "try again"]):
+            return NodeType.ERROR
+        
+        # Sleep/wait nodes
+        if any(phrase in text_lower for phrase in ["more time", "continue", "press any key"]):
+            return NodeType.SLEEP
+        
+        # Decision nodes - contain questions or simple yes/no choices
+        if any(phrase in text_lower for phrase in ["?", "yes", "no", "correct"]) or len(text.split()) <= 5:
+            return NodeType.DECISION
+        
+        # Default to action
+        return NodeType.ACTION
+
+    def _create_ivr_node(self, node: Dict, connections: List[Dict], label: str, node_id_to_label: Dict[str, str] = None) -> Dict[str, Any]:
+        """Create IVR node following allflows LITE patterns"""
+        text = node['text']
+        node_type = node['type']
+        
+        # Dynamic variable detection
+        variables = self._detect_variables_dynamically(text)
+        
+        # Segment text like Andres does manually
+        segments = self._segment_text_like_andres(text, variables)
+        
+        # Generate voice prompts using real database
+        play_log, play_prompt = self._generate_voice_prompts(segments, variables)
+        
+        # Create base node following allflows property order
+        ivr_node = {'label': label}
+        
+        # Add playLog or log
+        if len(play_log) > 1:
+            ivr_node['playLog'] = play_log
+        elif play_log:
+            ivr_node['log'] = play_log[0]
+        
+        # Add playPrompt
+        if len(play_prompt) > 1:
+            ivr_node['playPrompt'] = play_prompt
+        elif play_prompt:
+            ivr_node['playPrompt'] = play_prompt[0]
+        
+        # Add interaction logic based on node type
+        if node_type in [NodeType.WELCOME, NodeType.AVAILABILITY, NodeType.DECISION]:
+            self._add_input_logic(ivr_node, connections, node, node_id_to_label)
+        elif node_type == NodeType.RESPONSE:
+            self._add_response_logic(ivr_node, label)
+        elif len(connections) == 1:
+            # Simple goto
+            target_id = connections[0]['target']
+            if node_id_to_label and target_id in node_id_to_label:
+                target_label = node_id_to_label[target_id]
+            else:
+                target_label = self._generate_meaningful_label("", NodeType.ACTION, target_id)
+            ivr_node['goto'] = target_label
+        
+        return ivr_node
+
+    def _add_input_logic(self, ivr_node: Dict, connections: List[Dict], node: Dict, node_id_to_label: Dict[str, str] = None):
+        """Add getDigits and branch logic - IMPROVED LABEL PARSING"""
+        if not connections:
+            return
+        
+        # Determine valid choices from connection labels with better parsing
+        valid_choices = []
+        branch_map = {}
+        
+        for conn in connections:
+            label = conn.get('label', '').lower()
+            target = conn['target']
+            
+            # Use the pre-computed label if available
+            if node_id_to_label and target in node_id_to_label:
+                target_label = node_id_to_label[target]
+            else:
+                target_label = self._generate_meaningful_label("", NodeType.ACTION, target)
+            
+            print(f"🔀 Processing connection label: '{label}' -> {target} ({target_label})")
+            
+            # Extract digit from various label formats
+            if re.search(r'\b1\b', label) or 'press 1' in label:
+                valid_choices.append('1')
+                branch_map['1'] = target_label
+            elif re.search(r'\b3\b', label) or 'press 3' in label:
+                valid_choices.append('3')
+                branch_map['3'] = target_label
+            elif re.search(r'\b7\b', label) or 'press 7' in label:
+                valid_choices.append('7')
+                branch_map['7'] = target_label
+            elif re.search(r'\b9\b', label) or 'press 9' in label:
+                valid_choices.append('9')
+                branch_map['9'] = target_label
+            elif re.search(r'\b0\b', label) or 'press 0' in label:
+                valid_choices.append('0')
+                branch_map['0'] = target_label
+            elif any(phrase in label for phrase in ['no input', 'timeout', 'none']):
+                branch_map['none'] = target_label
+            elif any(phrase in label for phrase in ['invalid', 'error', 'retry']):
+                branch_map['error'] = target_label
+            elif any(phrase in label for phrase in ['yes', 'correct']):
+                branch_map['yes'] = target_label  # For yes/no decisions
+            elif any(phrase in label for phrase in ['no', 'incorrect']):
+                branch_map['no'] = target_label   # For yes/no decisions
+            else:
+                # Default connection or self-loop
+                if conn['source'] == conn['target']:
+                    # Self-loop for retry
+                    continue
+                else:
+                    # Direct connection without input
+                    if not branch_map:
+                        ivr_node['goto'] = target_label
+                        return
+        
+        # Add getDigits configuration
+        if valid_choices:
+            ivr_node['getDigits'] = {
+                'numDigits': 1,
+                'maxTime': 7,
+                'validChoices': '|'.join(sorted(set(valid_choices))),
+                'errorPrompt': 'callflow:1009'
+            }
+            
+            # Add error handling if not already specified
+            if 'error' not in branch_map:
+                branch_map['error'] = 'Problems'
+            if 'none' not in branch_map and 'timeout' not in branch_map:
+                branch_map['none'] = 'Problems'
+            
+            ivr_node['branch'] = branch_map
+            print(f"✅ Added input logic: choices={valid_choices}, branches={branch_map}")
+        elif branch_map:
+            # Yes/no style decision without numeric input
+            ivr_node['branch'] = branch_map
+            print(f"✅ Added decision logic: branches={branch_map}")
+        else:
+            print(f"⚠️ No input logic detected for connections: {[c['label'] for c in connections]}")
+
+    def _add_response_logic(self, ivr_node: Dict, label: str):
+        """Add gosub for response handling like allflows LITE"""
+        if 'accept' in label.lower():
+            ivr_node['gosub'] = ['SaveCallResult', 1001, 'Accept']
+        elif 'decline' in label.lower():
+            ivr_node['gosub'] = ['SaveCallResult', 1002, 'Decline']
+        elif 'not home' in label.lower():
+            ivr_node['gosub'] = ['SaveCallResult', 1006, 'NotHome']
+        else:
+            ivr_node['goto'] = 'Goodbye'
+
+    def convert_mermaid_to_ivr(self, mermaid_code: str) -> Tuple[List[Dict[str, Any]], List[str]]:
+        """Main conversion method - PRODUCTION READY WITH DEBUGGING"""
+        notes = []
+        
+        try:
+            print(f"🚀 Starting conversion of Mermaid diagram...")
+            print(f"📝 Input length: {len(mermaid_code)} characters")
+            
+            # Parse Mermaid diagram
+            nodes, connections = self._parse_mermaid_diagram(mermaid_code)
+            notes.append(f"Parsed {len(nodes)} nodes and {len(connections)} connections")
+            
+            if not nodes:
+                notes.append("❌ No nodes found in diagram - check Mermaid syntax")
+                print("❌ PARSING FAILED - No nodes extracted")
+                print("📋 Input preview:")
+                for i, line in enumerate(mermaid_code.split('\n')[:10]):
+                    print(f"  {i+1}: {line}")
+                return self._create_fallback_flow(), notes
+            
+            print(f"✅ Successfully parsed {len(nodes)} nodes")
+            
+            # Create a mapping of node IDs to meaningful labels
+            node_id_to_label = {}
+            used_labels = set()
+            
+            for node in nodes:
+                base_label = self._generate_meaningful_label(node['text'], node['type'], node['id'], nodes)
+                
+                # Handle duplicate labels by adding suffix
+                final_label = base_label
+                counter = 1
+                while final_label in used_labels:
+                    final_label = f"{base_label} {counter}"
+                    counter += 1
+                
+                node_id_to_label[node['id']] = final_label
+                used_labels.add(final_label)
+                print(f"🏷️ {node['id']} -> '{final_label}' ({node['type'].value})")
+            
+            # Generate IVR nodes with meaningful labels
+            ivr_nodes = []
+            
+            for node in nodes:
+                print(f"\n🔄 Processing node {node['id']}: {node['text'][:50]}...")
+                
+                # Get the meaningful label
+                label = node_id_to_label[node['id']]
+                
+                # Get connections for this node
+                node_connections = [c for c in connections if c['source'] == node['id']]
+                print(f"🔗 Found {len(node_connections)} outgoing connections")
+                
+                # Create IVR node with node mapping for better branch labels
+                ivr_node = self._create_ivr_node(node, node_connections, label, node_id_to_label)
+                ivr_nodes.append(ivr_node)
+                
+                notes.append(f"Generated node: {label}")
+                print(f"✅ Generated IVR node: {label}")
+            
+            # Add standard termination nodes if not present
+            if not any(node.get('label') == 'Problems' for node in ivr_nodes):
+                ivr_nodes.append({
+                    'label': 'Problems',
+                    'log': 'Error handler - invalid input or system error',
+                    'playPrompt': 'callflow:1351',
+                    'goto': 'Goodbye'
+                })
+                notes.append("Added standard 'Problems' error handler")
+            
+            if not any(node.get('label') == 'Goodbye' for node in ivr_nodes):
+                ivr_nodes.append({
+                    'label': 'Goodbye',
+                    'log': 'Thank you goodbye',
+                    'playPrompt': 'callflow:1029'
+                })
+                notes.append("Added standard 'Goodbye' termination")
+            
+            notes.append(f"✅ Generated {len(ivr_nodes)} production-ready IVR nodes")
+            print(f"🎉 CONVERSION SUCCESSFUL - Generated {len(ivr_nodes)} nodes")
+            
+            return ivr_nodes, notes
+            
+        except Exception as e:
+            error_msg = f"❌ Conversion failed: {str(e)}"
+            notes.append(error_msg)
+            print(error_msg)
+            import traceback
+            traceback.print_exc()
+            return self._create_fallback_flow(), notes
+
+    def _create_fallback_flow(self) -> List[Dict[str, Any]]:
+        """Create fallback flow for errors"""
+        return [
+            {
+                'label': 'Problems',
+                'log': 'Error handler',
+                'playPrompt': 'callflow:1351',
+                'goto': 'Goodbye'
+            },
+            {
+                'label': 'Goodbye',
+                'log': 'Thank you goodbye',
+                'playPrompt': 'callflow:1029'
+            }
+        ]
+
+# Main function for the app
+def convert_mermaid_to_ivr(mermaid_code: str, uploaded_csv_file=None) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Production-ready conversion function with optional CSV upload"""
+    converter = ProductionIVRConverter(uploaded_csv_file)
+    return converter.convert_mermaid_to_ivr(mermaid_code)
+, '', first_word)
+                    segments.append(clean_word)
+                    remaining_text = ' '.join(words[1:])
+                    print(f"📝 Complete word: '{clean_word}'")
+                else:
+                    break
         
         print(f"🎯 Segmentation result: {segments}")
         return segments if segments else [processed_text]
