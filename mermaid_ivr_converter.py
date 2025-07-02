@@ -472,13 +472,28 @@ class DatabaseDrivenIVRConverter:
             return self._create_fallback_flow(), notes
 
     def _parse_mermaid(self, mermaid_code: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, str]]]:
-        """Parse mermaid code into nodes and connections"""
+        """Parse mermaid code into nodes and connections with enhanced text extraction"""
         lines = [line.strip() for line in mermaid_code.split('\n') if line.strip()]
         
         nodes = []
         connections = []
         node_texts = {}
         
+        # First pass: Extract standalone node definitions
+        for line in lines:
+            if line.startswith('flowchart') or line.startswith('%%') or '-->' in line:
+                continue
+                
+            # Look for standalone node definitions like A["text"]
+            if '"' in line:
+                quote_start = line.find('"')
+                quote_end = line.rfind('"')
+                if quote_start != -1 and quote_end != -1 and quote_end > quote_start:
+                    # Get node ID (everything before the bracket/quote)
+                    before_bracket = line[:quote_start]
+                    id_match = re.search(r'([A-Z]+)\s*[\[{]?\s*
+        
+        # Second pass: Parse connections and extract inline node definitions
         for line in lines:
             if line.startswith('flowchart') or line.startswith('%%'):
                 continue
@@ -486,47 +501,3863 @@ class DatabaseDrivenIVRConverter:
             # Parse connections and extract nodes
             if '-->' in line:
                 try:
-                    # Extract connection parts
-                    parts = line.split('-->')
-                    if len(parts) >= 2:
-                        source_part = parts[0].strip()
-                        target_part = parts[1].strip()
-                        
-                        # Extract source node - handle both inline definitions and references
-                        source_match = re.search(r'([A-Z]+)(?:\[([^\]]+)\])?', source_part)
-                        if source_match:
-                            source_id = source_match.group(1)
-                            source_text = source_match.group(2) if source_match.group(2) else source_id
-                            # Clean HTML tags from text
-                            source_text = re.sub(r'<br\s*/?>', ' ', source_text)
-                            source_text = re.sub(r'<[^>]+>', '', source_text)
-                            node_texts[source_id] = source_text.strip()
-                        
-                        # Extract connection label
+                    # Split the line at --> to separate source and target
+                    arrow_pos = line.find('-->')
+                    source_part = line[:arrow_pos].strip()
+                    target_part = line[arrow_pos + 3:].strip()
+                    
+                    # Enhanced source node extraction
+                    # Handle patterns like: A["complex text with (variables) and <br/> tags"]
+                    source_id = None
+                    if '"' in source_part:
+                        # Extract from quoted definition
+                        quote_start = source_part.find('"')
+                        quote_end = source_part.rfind('"')
+                        if quote_start != -1 and quote_end != -1 and quote_end > quote_start:
+                            # Get node ID (everything before the bracket/quote)
+                            before_bracket = source_part[:quote_start]
+                            id_match = re.search(r'([A-Z]+)\s*[\[{]?\s*
+        
+        # Create node objects with proper classification
+        for node_id, node_text in node_texts.items():
+            # Generate descriptive label
+            label = self._generate_descriptive_label(node_text, connections, node_id)
+            
+            # Classify node type
+            node_type = self._classify_node_type(node_text, connections, node_id)
+            
+            nodes.append({
+                'id': node_id,
+                'text': node_text,
+                'label': label,
+                'type': node_type
+            })
+        
+        return nodes, connections
+
+    def _classify_node_type(self, text: str, connections: List[Dict[str, str]], node_id: str) -> NodeType:
+        """Classify node type for proper IVR generation"""
+        text_lower = text.lower()
+        
+        # Analyze outgoing connections to help classification
+        outgoing_connections = [conn for conn in connections if conn['source'] == node_id]
+        has_multiple_choices = len(outgoing_connections) > 1
+        
+        if 'welcome' in text_lower or ('this is an' in text_lower and 'press' in text_lower):
+            return NodeType.WELCOME
+        elif 'pin' in text_lower and 'enter' in text_lower:
+            return NodeType.PIN_ENTRY
+        elif 'available' in text_lower and 'callout' in text_lower:
+            return NodeType.AVAILABILITY
+        elif 'accept' in text_lower or 'decline' in text_lower or 'not home' in text_lower:
+            return NodeType.RESPONSE
+        elif 'goodbye' in text_lower or 'thank you' in text_lower:
+            return NodeType.GOODBYE
+        elif 'problems' in text_lower or 'error' in text_lower:
+            return NodeType.ERROR
+        elif 'press any key' in text_lower or '30-second' in text_lower:
+            return NodeType.SLEEP
+        elif has_multiple_choices or ('?' in text_lower and len(outgoing_connections) > 0):
+            return NodeType.DECISION
+        else:
+            return NodeType.ACTION
+
+    def _generate_descriptive_label(self, text: str, connections: List[Dict[str, str]], node_id: str) -> str:
+        """Generate descriptive label following Andres's conventions"""
+        text_lower = text.lower()
+        
+        # Welcome/opening nodes
+        if 'welcome' in text_lower or ('this is an' in text_lower and 'callout' in text_lower):
+            return "Live Answer"
+        
+        # PIN related
+        elif 'pin' in text_lower and 'enter' in text_lower:
+            return "Enter PIN"
+        elif 'pin' in text_lower and ('correct' in text_lower or 'valid' in text_lower):
+            return "PIN Validation"
+        elif 'invalid' in text_lower and ('pin' in text_lower or 'entry' in text_lower):
+            return "Invalid Entry"
+        
+        # Availability
+        elif 'available' in text_lower and 'callout' in text_lower:
+            return "Available For Callout"
+        
+        # Responses (following allflows patterns)
+        elif 'accept' in text_lower and 'response' in text_lower:
+            return "Accept"
+        elif 'decline' in text_lower:
+            return "Decline"
+        elif 'not home' in text_lower:
+            return "Not Home"
+        elif 'qualified' in text_lower or 'call back' in text_lower:
+            return "Qualified No"
+        
+        # System messages
+        elif 'goodbye' in text_lower:
+            return "Goodbye"
+        elif 'thank you' in text_lower:
+            return "Goodbye"
+        elif 'problems' in text_lower:
+            return "Problems"
+        elif 'press any key' in text_lower or '30-second' in text_lower:
+            return "Sleep"
+        
+        # Callout information
+        elif 'callout reason' in text_lower:
+            return "Callout Reason"
+        elif 'trouble location' in text_lower:
+            return "Trouble Location"
+        elif 'custom message' in text_lower:
+            return "Custom Message"
+        elif 'electric callout' in text_lower:
+            return "Electric Callout"
+        
+        # Fallback to meaningful name
+        else:
+            # Extract key words for label
+            words = re.findall(r'\b[A-Z][a-z]+', text)
+            if words:
+                return ' '.join(words[:2])
+            else:
+                return node_id.title()
+
+    def _generate_database_driven_flow(self, nodes: List[Dict[str, Any]], connections: List[Dict[str, str]], notes: List[str]) -> List[Dict[str, Any]]:
+        """Generate complete IVR flow using database-driven approach with allflows LITE patterns"""
+        if not nodes:
+            notes.append("No nodes to process")
+            return []
+            
+        ivr_nodes = []
+        used_labels = set()
+        
+        # Create a mapping of node IDs to their generated labels for cross-referencing
+        node_id_to_label = {}
+        
+        # First pass: Generate labels for all nodes
+        for node in nodes:
+            label = node['label']
+            counter = 2
+            while label in used_labels:
+                label = f"{node['label']} {counter}"
+                counter += 1
+            used_labels.add(label)
+            node_id_to_label[node['id']] = label
+        
+        # Second pass: Generate IVR nodes with proper cross-references
+        for node in nodes:
+            label = node_id_to_label[node['id']]
+            
+            # Generate IVR node(s) based on type and complexity
+            node_connections = [conn for conn in connections if conn['source'] == node['id']]
+            
+            # Check if we should create multi-object nodes (glommer nodes)
+            if self._should_split_into_glommer_nodes(node['text']) and node.get('type') == NodeType.WELCOME:
+                generated_nodes = self._create_multi_object_welcome_node(node, label, node_connections, node_id_to_label, notes)
+            else:
+                generated_nodes = self._create_database_node_with_mapping(node, label, node_connections, node_id_to_label, notes)
+            
+            for ivr_node in generated_nodes:
+                # Add nobarge where appropriate
+                if node.get('type') in [NodeType.RESPONSE, NodeType.GOODBYE, NodeType.ERROR]:
+                    ivr_node["nobarge"] = "1"
+                ivr_nodes.append(ivr_node)
+        
+        # Add standard handlers if not present
+        self._ensure_standard_handlers(ivr_nodes, used_labels, notes)
+        
+        return ivr_nodes
+
+    def _create_multi_object_welcome_node(self, node: Dict[str, Any], label: str, connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]) -> List[Dict[str, Any]]:
+        """Create multi-object welcome node following allflows LITE patterns"""
+        text = node['text']
+        segments, variables = self._intelligent_segmentation(text)
+        play_log, play_prompt = self._generate_database_prompts(segments, variables, notes)
+        
+        nodes = []
+        
+        # Object 1: Main callout information (first part)
+        main_segments = 5  # Split at reasonable boundary
+        main_node = {
+            "label": label
+        }
+        
+        if len(play_log) > main_segments:
+            main_node["playLog"] = play_log[:main_segments]
+            main_node["playPrompt"] = play_prompt[:main_segments]
+        else:
+            main_node["playLog"] = play_log
+            main_node["playPrompt"] = play_prompt
+        
+        nodes.append(main_node)
+        
+        # Object 2: Environment check (if not production) - allflows LITE pattern
+        env_node = {
+            "log": "environment",
+            "guard": "function (){ return this.data.env!='prod' && this.data.env!='PROD' }",
+            "playPrompt": "callflow:{{env}}",
+            "nobarge": "1"
+        }
+        nodes.append(env_node)
+        
+        # Object 3: Menu options with getDigits (remaining segments)
+        menu_node = {}
+        
+        if len(play_log) > main_segments:
+            menu_node["playLog"] = play_log[main_segments:]
+            menu_node["playPrompt"] = play_prompt[main_segments:]
+        else:
+            menu_node["playLog"] = ["Menu options"]
+            menu_node["playPrompt"] = ["callflow:MenuOptions"]
+        
+        # Add getDigits and branch logic
+        self._add_welcome_logic_with_mapping(menu_node, connections, node_id_to_label, notes)
+        nodes.append(menu_node)
+        
+        notes.append(f"Created multi-object welcome node with {len(nodes)} components")
+        
+        return nodes
+
+    def _create_database_node_with_mapping(self, node: Dict[str, Any], label: str, connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]) -> List[Dict[str, Any]]:
+        """Create IVR node(s) using database matching with proper label mapping"""
+        text = node['text']
+        node_type = node.get('type', NodeType.ACTION)
+        
+        # Intelligent segmentation using database
+        segments, variables = self._intelligent_segmentation(text)
+        play_log, play_prompt = self._generate_database_prompts(segments, variables, notes)
+        
+        # Create base node following allflows property order
+        ivr_node = {}
+        
+        # Property order: label → playLog → playPrompt → getDigits → branch → maxLoop → gosub → goto → nobarge
+        ivr_node["label"] = label
+        
+        if len(play_log) > 1:
+            ivr_node["playLog"] = play_log
+        elif play_log:
+            ivr_node["log"] = play_log[0]  # Single log entry uses "log" instead of "playLog"
+        
+        if len(play_prompt) > 1:
+            ivr_node["playPrompt"] = play_prompt
+        elif play_prompt:
+            ivr_node["playPrompt"] = play_prompt[0]
+        
+        # Add interaction logic based on node type and connections
+        if node_type == NodeType.WELCOME and connections:
+            self._add_welcome_logic_with_mapping(ivr_node, connections, node_id_to_label, notes)
+        elif node_type == NodeType.PIN_ENTRY:
+            self._add_pin_logic_with_mapping(ivr_node, connections, node_id_to_label, notes)
+        elif node_type == NodeType.AVAILABILITY and connections:
+            self._add_availability_logic_with_mapping(ivr_node, connections, node_id_to_label, notes)
+        elif node_type == NodeType.RESPONSE:
+            self._add_response_logic(ivr_node, label, notes)
+        elif node_type == NodeType.SLEEP:
+            self._add_sleep_logic_with_mapping(ivr_node, connections, node_id_to_label, notes)
+        elif connections and len(connections) > 1:
+            self._add_decision_logic_with_mapping(ivr_node, connections, node_id_to_label, notes)
+        elif connections and len(connections) == 1:
+            target_id = connections[0]['target']
+            target_label = node_id_to_label.get(target_id, target_id)
+            ivr_node["goto"] = target_label
+        
+        return [ivr_node]
+
+    def _add_welcome_logic_with_mapping(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]):
+        """Add welcome node logic following allflows patterns with proper label mapping"""
+        ivr_node["getDigits"] = {
+            "numDigits": 1,
+            "maxTime": 1,  # Very short timeout for main menu (allflows LITE pattern)
+            "validChoices": "",
+            "errorPrompt": "callflow:1009"
+        }
+        
+        branch = {}
+        valid_choices = []
+        
+        for conn in connections:
+            label = conn['label'].lower()
+            digit_match = re.search(r'(\d+)', label)
+            
+            if digit_match:
+                digit = digit_match.group(1)
+                target_id = conn['target']
+                target_label = node_id_to_label.get(target_id, target_id)
+                branch[digit] = target_label
+                valid_choices.append(digit)
+            elif 'retry' in label or 'repeat' in label or 'invalid' in label:
+                # Self-reference for retries
+                branch["error"] = ivr_node["label"]
+        
+        # Add default handling
+        if branch:
+            ivr_node["branch"] = branch
+            ivr_node["getDigits"]["validChoices"] = "|".join(sorted(valid_choices))
+            # Add error handling
+            if "error" not in branch:
+                branch["error"] = ivr_node["label"]  # Self-reference for retries
+        
+        # Add retry logic (allflows LITE pattern)
+        ivr_node["maxLoop"] = ["Loop-Main", 3, "Problems"]
+
+    def _add_pin_logic_with_mapping(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]):
+        """Add PIN entry logic following allflows patterns with proper label mapping"""
+        ivr_node["getDigits"] = {
+            "numDigits": 5,  # 4 digits + pound (allflows LITE pattern)
+            "maxTries": 3,
+            "maxTime": 7,
+            "validChoices": "{{pin}}",  # Dynamic PIN validation
+            "errorPrompt": "callflow:1009",
+            "nonePrompt": "callflow:1009"
+        }
+        
+        # Add branch logic for validation
+        if connections:
+            branch = {}
+            for conn in connections:
+                if 'yes' in conn['label'].lower() or 'correct' in conn['label'].lower() or 'valid' in conn['label'].lower():
+                    target_id = conn['target']
+                    target_label = node_id_to_label.get(target_id, target_id)
+                    branch["match"] = target_label
+                elif 'no' in conn['label'].lower() or 'invalid' in conn['label'].lower() or 'retry' in conn['label'].lower():
+                    target_id = conn['target']
+                    target_label = node_id_to_label.get(target_id, target_id)
+                    branch["nomatch"] = target_label
+            
+            if branch:
+                ivr_node["branch"] = branch
+            
+        # Add retry handling
+        ivr_node["maxLoop"] = ["Loop-PIN", 3, "Problems"]
+
+    def _add_availability_logic_with_mapping(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]):
+        """Add availability check logic following allflows patterns with proper label mapping"""
+        ivr_node["getDigits"] = {
+            "numDigits": 1,
+            "maxTries": 3,
+            "maxTime": 7,
+            "validChoices": "1|3|0",  # Standard availability choices
+            "errorPrompt": "callflow:1009",
+            "nonePrompt": "callflow:1009"
+        }
+        
+        branch = {}
+        for conn in connections:
+            label = conn['label'].lower()
+            target_id = conn['target']
+            target_label = node_id_to_label.get(target_id, target_id)
+            
+            if '1' in label or 'accept' in label:
+                branch["1"] = target_label
+            elif '3' in label or 'decline' in label:
+                branch["3"] = target_label
+            elif '0' in label or 'call back' in label or '9' in label:
+                branch["0"] = target_label
+            elif 'invalid' in label or 'retry' in label:
+                branch["error"] = target_label
+        
+        # Add default error handling if not specified
+        if "error" not in branch:
+            branch["error"] = "Invalid Entry"
+        if "timeout" not in branch:
+            branch["timeout"] = "Invalid Entry"
+        
+        if branch:
+            ivr_node["branch"] = branch
+        
+        ivr_node["maxLoop"] = ["Loop-Availability", 3, "Problems"]
+
+    def _add_sleep_logic_with_mapping(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]):
+        """Add sleep/wait logic following allflows patterns with proper label mapping"""
+        ivr_node["getDigits"] = {
+            "numDigits": 1,
+            "maxTime": 30,  # 30-second timeout (allflows LITE pattern)
+            "validChoices": "1|2|3|4|5|6|7|8|9|0|*|#",
+            "errorPrompt": "callflow:1009",
+            "nonePrompt": "callflow:1009"
+        }
+        
+        # Default behavior for any key press or timeout
+        if connections:
+            target_id = connections[0]['target']
+            target_label = node_id_to_label.get(target_id, target_id)
+            ivr_node["branch"] = {
+                "next": target_label,
+                "none": target_label  # Same destination for timeout
+            }
+        else:
+            ivr_node["branch"] = {
+                "next": "Live Answer",
+                "none": "Live Answer"
+            }
+
+    def _add_decision_logic_with_mapping(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]):
+        """Add decision logic for multiple choice nodes with proper label mapping"""
+        ivr_node["getDigits"] = {
+            "numDigits": 1,
+            "maxTries": 3,
+            "maxTime": 7,
+            "validChoices": "",
+            "errorPrompt": "callflow:1009",
+            "nonePrompt": "callflow:1009"
+        }
+        
+        branch = {}
+        valid_choices = []
+        
+        for conn in connections:
+            digit_match = re.search(r'(\d+)', conn['label'])
+            if digit_match:
+                digit = digit_match.group(1)
+                target_id = conn['target']
+                target_label = node_id_to_label.get(target_id, target_id)
+                branch[digit] = target_label
+                valid_choices.append(digit)
+            elif 'yes' in conn['label'].lower():
+                target_id = conn['target']
+                target_label = node_id_to_label.get(target_id, target_id)
+                branch["yes"] = target_label
+            elif 'no' in conn['label'].lower():
+                target_id = conn['target']
+                target_label = node_id_to_label.get(target_id, target_id)
+                branch["no"] = target_label
+        
+        # Add error handling
+        if "error" not in branch:
+            branch["error"] = "Invalid Entry"
+        
+        if branch:
+            ivr_node["branch"] = branch
+            if valid_choices:
+                ivr_node["getDigits"]["validChoices"] = "|".join(valid_choices)
+        
+        ivr_node["maxLoop"] = ["Loop-Decision", 3, "Problems"]
+
+    def _add_response_logic(self, ivr_node: Dict[str, Any], label: str, notes: List[str]):
+        """Add response handler logic following allflows patterns"""
+        label_lower = label.lower()
+        
+        # Add gosub for response recording (allflows LITE pattern)
+        if 'accept' in label_lower:
+            ivr_node["gosub"] = self.response_codes['accept']
+        elif 'decline' in label_lower:
+            ivr_node["gosub"] = self.response_codes['decline']
+        elif 'not home' in label_lower:
+            ivr_node["gosub"] = self.response_codes['not_home']
+        elif 'qualified' in label_lower:
+            ivr_node["gosub"] = self.response_codes['qualified_no']
+        else:
+            ivr_node["gosub"] = self.response_codes['error']
+        
+        # Add nobarge for non-interruptible response messages
+        ivr_node["nobarge"] = "1"
+        
+        # Always go to Goodbye after response
+        ivr_node["goto"] = "Goodbye"
+
+    def _ensure_standard_handlers(self, ivr_nodes: List[Dict[str, Any]], used_labels: Set[str], notes: List[str]):
+        """Ensure standard handler nodes exist following allflows LITE patterns"""
+        existing_labels = {node.get('label') for node in ivr_nodes}
+        
+        # Add Problems handler if missing
+        if 'Problems' not in existing_labels:
+            problems_node = {
+                "label": "Problems",
+                "gosub": self.response_codes['error']
+            }
+            # Add the actual problem message components
+            ivr_nodes.append(problems_node)
+            
+            # Add the message part
+            problems_message = {
+                "nobarge": "1",
+                "playLog": ["I'm sorry you are having problems.", "Please have", "Employee name"],
+                "playPrompt": ["callflow:1351", "callflow:1017", "names:{{contact_id}}"]
+            }
+            ivr_nodes.append(problems_message)
+            
+            # Add call instructions
+            problems_call = {
+                "log": "call the",
+                "playPrompt": "callflow:1174"
+            }
+            ivr_nodes.append(problems_call)
+            
+            # Add final part
+            problems_final = {
+                "nobarge": "1",
+                "playLog": ["APS", "callout system", "at", "speak phone num"],
+                "playPrompt": ["location:{{level2_location}}", "callflow:1290", "callflow:1015", "digits:{{callback_number}}"],
+                "goto": "Goodbye"
+            }
+            ivr_nodes.append(problems_final)
+            
+            notes.append("Added complete Problems handler with multi-object structure")
+        
+        # Add Goodbye handler if missing
+        if 'Goodbye' not in existing_labels:
+            goodbye_node = {
+                "label": "Goodbye",
+                "log": "Goodbye(1029)",
+                "playPrompt": "callflow:1029",
+                "nobarge": "1",
+                "goto": "hangup"
+            }
+            ivr_nodes.append(goodbye_node)
+            notes.append("Added Goodbye handler")
+
+    def _create_fallback_flow(self) -> List[Dict[str, Any]]:
+        """Create fallback flow when parsing fails"""
+        return [
+            {
+                "label": "Live Answer",
+                "log": "Welcome message",
+                "playPrompt": "callflow:Welcome",
+                "goto": "Problems"
+            },
+            {
+                "label": "Problems",
+                "log": "Error handler",
+                "playPrompt": "callflow:1351",
+                "goto": "Goodbye"
+            },
+            {
+                "label": "Goodbye",
+                "log": "Goodbye message",
+                "playPrompt": "callflow:1029",
+                "goto": "hangup"
+            }
+        ]
+
+
+def convert_mermaid_to_ivr(mermaid_code: str) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Main conversion function using sophisticated database-driven approach"""
+    converter = DatabaseDrivenIVRConverter()
+    return converter.convert(mermaid_code)
+
+
+# Enhanced Format IVR Output Functions for allflows LITE compatibility
+def format_ivr_output(ivr_nodes: List[Dict[str, Any]]) -> str:
+    """
+    Format IVR nodes into production-ready JavaScript module.exports format
+    Enhanced for full allflows LITE compatibility
+    """
+    if not ivr_nodes:
+        return "module.exports = [];"
+    
+    # Clean and format the nodes following allflows property order
+    formatted_nodes = []
+    
+    for node in ivr_nodes:
+        # Ensure all nodes have required fields
+        clean_node = {}
+        
+        # Property order from allflows: label → log/playLog → playPrompt → getDigits → branch → maxLoop → gosub → goto → nobarge → guard
+        
+        # 1. Label (required)
+        if 'label' in node:
+            clean_node['label'] = node['label']
+        
+        # 2. Log/PlayLog (documentation)
+        if 'playLog' in node:
+            clean_node['playLog'] = node['playLog']
+        elif 'log' in node:
+            clean_node['log'] = node['log']
+        
+        # 3. PlayPrompt (voice files)
+        if 'playPrompt' in node:
+            clean_node['playPrompt'] = node['playPrompt']
+        
+        # 4. GetDigits (input collection)
+        if 'getDigits' in node:
+            clean_node['getDigits'] = node['getDigits']
+        
+        # 5. Branch (conditional navigation)
+        if 'branch' in node:
+            clean_node['branch'] = node['branch']
+        
+        # 6. MaxLoop (retry logic)
+        if 'maxLoop' in node:
+            clean_node['maxLoop'] = node['maxLoop']
+        
+        # 7. Gosub (subroutine calls)
+        if 'gosub' in node:
+            clean_node['gosub'] = node['gosub']
+        
+        # 8. Goto (direct transitions)
+        if 'goto' in node:
+            clean_node['goto'] = node['goto']
+        
+        # 9. Nobarge (non-interruptible)
+        if 'nobarge' in node:
+            clean_node['nobarge'] = node['nobarge']
+        
+        # 10. Guard (conditional execution) - allflows LITE pattern
+        if 'guard' in node:
+            clean_node['guard'] = node['guard']
+        
+        # Add any other properties that might be present
+        for key, value in node.items():
+            if key not in clean_node:
+                clean_node[key] = value
+        
+        formatted_nodes.append(clean_node)
+    
+    # Convert to JavaScript format with proper formatting
+    try:
+        # Use enhanced JavaScript formatting for allflows LITE compatibility
+        js_output = _format_as_javascript_enhanced(formatted_nodes)
+        return f"module.exports = {js_output};"
+        
+    except Exception as e:
+        # Fallback to basic JSON formatting
+        json_str = json.dumps(formatted_nodes, indent=2)
+        return f"module.exports = {json_str};"
+
+def _format_as_javascript_enhanced(nodes: List[Dict[str, Any]]) -> str:
+    """Enhanced format nodes as JavaScript array with allflows LITE compatibility"""
+    lines = ["["]
+    
+    for i, node in enumerate(nodes):
+        lines.append("    {")
+        
+        # Format each property with enhanced handling
+        for j, (key, value) in enumerate(node.items()):
+            formatted_value = _format_js_value_enhanced(value)
+            comma = "," if j < len(node) - 1 else ""
+            lines.append(f'        {key}: {formatted_value}{comma}')
+        
+        closer = "    }," if i < len(nodes) - 1 else "    }"
+        lines.append(closer)
+    
+    lines.append("]")
+    
+    return "\n".join(lines)
+
+def _format_js_value_enhanced(value: Any) -> str:
+    """Enhanced format a value for JavaScript output with guard function support"""
+    if isinstance(value, str):
+        # Special handling for guard functions (allflows LITE pattern)
+        if value.startswith("function"):
+            return value  # Don't quote function definitions
+        else:
+            return f'"{value}"'
+    elif isinstance(value, list):
+        if not value:
+            return "[]"
+        
+        # Check if all items are strings
+        if all(isinstance(item, str) for item in value):
+            formatted_items = [f'"{item}"' for item in value]
+            if len(formatted_items) == 1:
+                return f'[{formatted_items[0]}]'
+            else:
+                return "[\n            " + ",\n            ".join(formatted_items) + "\n        ]"
+        else:
+            # Mixed types - use JSON formatting but handle special cases
+            formatted_items = []
+            for item in value:
+                if isinstance(item, str):
+                    formatted_items.append(f'"{item}"')
+                else:
+                    formatted_items.append(str(item))
+            
+            if len(formatted_items) == 1:
+                return f'[{formatted_items[0]}]'
+            else:
+                return "[" + ", ".join(formatted_items) + "]"
+    
+    elif isinstance(value, dict):
+        if not value:
+            return "{}"
+        
+        lines = ["{"]
+        items = list(value.items())
+        for j, (k, v) in enumerate(items):
+            formatted_v = _format_js_value_enhanced(v)
+            comma = "," if j < len(items) - 1 else ""
+            lines.append(f'            {k}: {formatted_v}{comma}')
+        lines.append("        }")
+        
+        return "\n        ".join(lines)
+    
+    elif isinstance(value, bool):
+        return "true" if value else "false"
+    elif value is None:
+        return "null"
+    else:
+        return str(value)
+
+# Enhanced validation function for the generated IVR code
+def validate_ivr_nodes(ivr_nodes: List[Dict[str, Any]]) -> List[str]:
+    """Enhanced validate IVR nodes and return list of issues found"""
+    issues = []
+    labels = set()
+    
+    for i, node in enumerate(ivr_nodes):
+        # Check required fields
+        if 'label' not in node:
+            issues.append(f"Node {i}: Missing required 'label' field")
+        else:
+            label = node['label']
+            if label in labels:
+                issues.append(f"Node {i}: Duplicate label '{label}'")
+            labels.add(label)
+        
+        # Check branch targets
+        if 'branch' in node:
+            for digit, target in node['branch'].items():
+                if target not in labels and target not in ['Problems', 'Goodbye', 'hangup']:
+                    issues.append(f"Node {i}: Branch target '{target}' not found")
+        
+        # Check goto targets
+        if 'goto' in node:
+            target = node['goto']
+            if target not in labels and target not in ['Problems', 'Goodbye', 'hangup']:
+                issues.append(f"Node {i}: Goto target '{target}' not found")
+        
+        # Check getDigits structure
+        if 'getDigits' in node:
+            get_digits = node['getDigits']
+            if not isinstance(get_digits, dict):
+                issues.append(f"Node {i}: getDigits must be an object")
+            else:
+                required_fields = ['numDigits', 'validChoices']
+                for field in required_fields:
+                    if field not in get_digits:
+                        issues.append(f"Node {i}: getDigits missing '{field}' field")
+        
+        # Check gosub structure (allflows LITE pattern)
+        if 'gosub' in node:
+            gosub = node['gosub']
+            if not isinstance(gosub, list) or len(gosub) != 3:
+                issues.append(f"Node {i}: gosub must be array of 3 elements [function, code, description]")
+        
+        # Check guard function syntax
+        if 'guard' in node:
+            guard = node['guard']
+            if not isinstance(guard, str) or not guard.startswith('function'):
+                issues.append(f"Node {i}: guard must be a function string")
+    
+    return issues
+, before_bracket)
+                            if id_match:
+                                source_id = id_match.group(1)
+                                # Extract text between quotes
+                                source_text = source_part[quote_start + 1:quote_end]
+                                # Clean HTML tags from text
+                                source_text = re.sub(r'<br\s*/?>', ' ', source_text)
+                                source_text = re.sub(r'<[^>]+>', '', source_text)
+                                node_texts[source_id] = source_text.strip()
+                    
+                    if not source_id:
+                        # Fallback to simple ID extraction
+                        simple_match = re.match(r'^([A-Z]+)', source_part)
+                        if simple_match:
+                            source_id = simple_match.group(1)
+                    
+                    # Extract connection label from target part
+                    connection_label = ""
+                    if '|' in target_part:
+                        # Extract label between pipes
                         label_match = re.search(r'\|"([^"]+)"\|', target_part)
                         if not label_match:
                             label_match = re.search(r'\|([^|]+)\|', target_part)
-                        connection_label = label_match.group(1).strip('"') if label_match else ""
+                        if label_match:
+                            connection_label = label_match.group(1).strip('"')
+                        # Remove label from target part
+                        target_part = re.sub(r'\|[^|]*\|', '', target_part).strip()
+                    
+                    # Enhanced target node extraction
+                    target_id = None
+                    if '"' in target_part:
+                        # Extract from quoted definition  
+                        quote_start = target_part.find('"')
+                        quote_end = target_part.rfind('"')
+                        if quote_start != -1 and quote_end != -1 and quote_end > quote_start:
+                            # Get node ID (everything before the bracket/quote)
+                            before_bracket = target_part[:quote_start]
+                            id_match = re.search(r'([A-Z]+)\s*[\[{]?\s*
+        
+        # Fallback: If we still don't have text for a node, try to extract it more aggressively
+        for line in lines:
+            if '-->' not in line and not line.startswith('flowchart'):
+                # Try to match any node definition pattern
+                fallback_match = re.search(r'([A-Z]+)\s*[\[{]"([^"]+)"[\]}]', line)
+                if fallback_match:
+                    node_id = fallback_match.group(1)
+                    if node_id not in node_texts:
+                        node_text = fallback_match.group(2)
+                        node_text = re.sub(r'<br\s*/?>', ' ', node_text)
+                        node_text = re.sub(r'<[^>]+>', '', node_text)
+                        node_texts[node_id] = node_text.strip()
+        
+        # Create node objects with proper classification
+        for node_id, node_text in node_texts.items():
+            # Generate descriptive label
+            label = self._generate_descriptive_label(node_text, connections, node_id)
+            
+            # Classify node type
+            node_type = self._classify_node_type(node_text, connections, node_id)
+            
+            nodes.append({
+                'id': node_id,
+                'text': node_text,
+                'label': label,
+                'type': node_type
+            })
+        
+        return nodes, connections
+
+    def _classify_node_type(self, text: str, connections: List[Dict[str, str]], node_id: str) -> NodeType:
+        """Classify node type for proper IVR generation"""
+        text_lower = text.lower()
+        
+        # Analyze outgoing connections to help classification
+        outgoing_connections = [conn for conn in connections if conn['source'] == node_id]
+        has_multiple_choices = len(outgoing_connections) > 1
+        
+        if 'welcome' in text_lower or ('this is an' in text_lower and 'press' in text_lower):
+            return NodeType.WELCOME
+        elif 'pin' in text_lower and 'enter' in text_lower:
+            return NodeType.PIN_ENTRY
+        elif 'available' in text_lower and 'callout' in text_lower:
+            return NodeType.AVAILABILITY
+        elif 'accept' in text_lower or 'decline' in text_lower or 'not home' in text_lower:
+            return NodeType.RESPONSE
+        elif 'goodbye' in text_lower or 'thank you' in text_lower:
+            return NodeType.GOODBYE
+        elif 'problems' in text_lower or 'error' in text_lower:
+            return NodeType.ERROR
+        elif 'press any key' in text_lower or '30-second' in text_lower:
+            return NodeType.SLEEP
+        elif has_multiple_choices or ('?' in text_lower and len(outgoing_connections) > 0):
+            return NodeType.DECISION
+        else:
+            return NodeType.ACTION
+
+    def _generate_descriptive_label(self, text: str, connections: List[Dict[str, str]], node_id: str) -> str:
+        """Generate descriptive label following Andres's conventions"""
+        text_lower = text.lower()
+        
+        # Welcome/opening nodes
+        if 'welcome' in text_lower or ('this is an' in text_lower and 'callout' in text_lower):
+            return "Live Answer"
+        
+        # PIN related
+        elif 'pin' in text_lower and 'enter' in text_lower:
+            return "Enter PIN"
+        elif 'pin' in text_lower and ('correct' in text_lower or 'valid' in text_lower):
+            return "PIN Validation"
+        elif 'invalid' in text_lower and ('pin' in text_lower or 'entry' in text_lower):
+            return "Invalid Entry"
+        
+        # Availability
+        elif 'available' in text_lower and 'callout' in text_lower:
+            return "Available For Callout"
+        
+        # Responses (following allflows patterns)
+        elif 'accept' in text_lower and 'response' in text_lower:
+            return "Accept"
+        elif 'decline' in text_lower:
+            return "Decline"
+        elif 'not home' in text_lower:
+            return "Not Home"
+        elif 'qualified' in text_lower or 'call back' in text_lower:
+            return "Qualified No"
+        
+        # System messages
+        elif 'goodbye' in text_lower:
+            return "Goodbye"
+        elif 'thank you' in text_lower:
+            return "Goodbye"
+        elif 'problems' in text_lower:
+            return "Problems"
+        elif 'press any key' in text_lower or '30-second' in text_lower:
+            return "Sleep"
+        
+        # Callout information
+        elif 'callout reason' in text_lower:
+            return "Callout Reason"
+        elif 'trouble location' in text_lower:
+            return "Trouble Location"
+        elif 'custom message' in text_lower:
+            return "Custom Message"
+        elif 'electric callout' in text_lower:
+            return "Electric Callout"
+        
+        # Fallback to meaningful name
+        else:
+            # Extract key words for label
+            words = re.findall(r'\b[A-Z][a-z]+', text)
+            if words:
+                return ' '.join(words[:2])
+            else:
+                return node_id.title()
+
+    def _generate_database_driven_flow(self, nodes: List[Dict[str, Any]], connections: List[Dict[str, str]], notes: List[str]) -> List[Dict[str, Any]]:
+        """Generate complete IVR flow using database-driven approach with allflows LITE patterns"""
+        if not nodes:
+            notes.append("No nodes to process")
+            return []
+            
+        ivr_nodes = []
+        used_labels = set()
+        
+        # Create a mapping of node IDs to their generated labels for cross-referencing
+        node_id_to_label = {}
+        
+        # First pass: Generate labels for all nodes
+        for node in nodes:
+            label = node['label']
+            counter = 2
+            while label in used_labels:
+                label = f"{node['label']} {counter}"
+                counter += 1
+            used_labels.add(label)
+            node_id_to_label[node['id']] = label
+        
+        # Second pass: Generate IVR nodes with proper cross-references
+        for node in nodes:
+            label = node_id_to_label[node['id']]
+            
+            # Generate IVR node(s) based on type and complexity
+            node_connections = [conn for conn in connections if conn['source'] == node['id']]
+            
+            # Check if we should create multi-object nodes (glommer nodes)
+            if self._should_split_into_glommer_nodes(node['text']) and node.get('type') == NodeType.WELCOME:
+                generated_nodes = self._create_multi_object_welcome_node(node, label, node_connections, node_id_to_label, notes)
+            else:
+                generated_nodes = self._create_database_node_with_mapping(node, label, node_connections, node_id_to_label, notes)
+            
+            for ivr_node in generated_nodes:
+                # Add nobarge where appropriate
+                if node.get('type') in [NodeType.RESPONSE, NodeType.GOODBYE, NodeType.ERROR]:
+                    ivr_node["nobarge"] = "1"
+                ivr_nodes.append(ivr_node)
+        
+        # Add standard handlers if not present
+        self._ensure_standard_handlers(ivr_nodes, used_labels, notes)
+        
+        return ivr_nodes
+
+    def _create_multi_object_welcome_node(self, node: Dict[str, Any], label: str, connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]) -> List[Dict[str, Any]]:
+        """Create multi-object welcome node following allflows LITE patterns"""
+        text = node['text']
+        segments, variables = self._intelligent_segmentation(text)
+        play_log, play_prompt = self._generate_database_prompts(segments, variables, notes)
+        
+        nodes = []
+        
+        # Object 1: Main callout information (first part)
+        main_segments = 5  # Split at reasonable boundary
+        main_node = {
+            "label": label
+        }
+        
+        if len(play_log) > main_segments:
+            main_node["playLog"] = play_log[:main_segments]
+            main_node["playPrompt"] = play_prompt[:main_segments]
+        else:
+            main_node["playLog"] = play_log
+            main_node["playPrompt"] = play_prompt
+        
+        nodes.append(main_node)
+        
+        # Object 2: Environment check (if not production) - allflows LITE pattern
+        env_node = {
+            "log": "environment",
+            "guard": "function (){ return this.data.env!='prod' && this.data.env!='PROD' }",
+            "playPrompt": "callflow:{{env}}",
+            "nobarge": "1"
+        }
+        nodes.append(env_node)
+        
+        # Object 3: Menu options with getDigits (remaining segments)
+        menu_node = {}
+        
+        if len(play_log) > main_segments:
+            menu_node["playLog"] = play_log[main_segments:]
+            menu_node["playPrompt"] = play_prompt[main_segments:]
+        else:
+            menu_node["playLog"] = ["Menu options"]
+            menu_node["playPrompt"] = ["callflow:MenuOptions"]
+        
+        # Add getDigits and branch logic
+        self._add_welcome_logic_with_mapping(menu_node, connections, node_id_to_label, notes)
+        nodes.append(menu_node)
+        
+        notes.append(f"Created multi-object welcome node with {len(nodes)} components")
+        
+        return nodes
+
+    def _create_database_node_with_mapping(self, node: Dict[str, Any], label: str, connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]) -> List[Dict[str, Any]]:
+        """Create IVR node(s) using database matching with proper label mapping"""
+        text = node['text']
+        node_type = node.get('type', NodeType.ACTION)
+        
+        # Intelligent segmentation using database
+        segments, variables = self._intelligent_segmentation(text)
+        play_log, play_prompt = self._generate_database_prompts(segments, variables, notes)
+        
+        # Create base node following allflows property order
+        ivr_node = {}
+        
+        # Property order: label → playLog → playPrompt → getDigits → branch → maxLoop → gosub → goto → nobarge
+        ivr_node["label"] = label
+        
+        if len(play_log) > 1:
+            ivr_node["playLog"] = play_log
+        elif play_log:
+            ivr_node["log"] = play_log[0]  # Single log entry uses "log" instead of "playLog"
+        
+        if len(play_prompt) > 1:
+            ivr_node["playPrompt"] = play_prompt
+        elif play_prompt:
+            ivr_node["playPrompt"] = play_prompt[0]
+        
+        # Add interaction logic based on node type and connections
+        if node_type == NodeType.WELCOME and connections:
+            self._add_welcome_logic_with_mapping(ivr_node, connections, node_id_to_label, notes)
+        elif node_type == NodeType.PIN_ENTRY:
+            self._add_pin_logic_with_mapping(ivr_node, connections, node_id_to_label, notes)
+        elif node_type == NodeType.AVAILABILITY and connections:
+            self._add_availability_logic_with_mapping(ivr_node, connections, node_id_to_label, notes)
+        elif node_type == NodeType.RESPONSE:
+            self._add_response_logic(ivr_node, label, notes)
+        elif node_type == NodeType.SLEEP:
+            self._add_sleep_logic_with_mapping(ivr_node, connections, node_id_to_label, notes)
+        elif connections and len(connections) > 1:
+            self._add_decision_logic_with_mapping(ivr_node, connections, node_id_to_label, notes)
+        elif connections and len(connections) == 1:
+            target_id = connections[0]['target']
+            target_label = node_id_to_label.get(target_id, target_id)
+            ivr_node["goto"] = target_label
+        
+        return [ivr_node]
+
+    def _add_welcome_logic_with_mapping(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]):
+        """Add welcome node logic following allflows patterns with proper label mapping"""
+        ivr_node["getDigits"] = {
+            "numDigits": 1,
+            "maxTime": 1,  # Very short timeout for main menu (allflows LITE pattern)
+            "validChoices": "",
+            "errorPrompt": "callflow:1009"
+        }
+        
+        branch = {}
+        valid_choices = []
+        
+        for conn in connections:
+            label = conn['label'].lower()
+            digit_match = re.search(r'(\d+)', label)
+            
+            if digit_match:
+                digit = digit_match.group(1)
+                target_id = conn['target']
+                target_label = node_id_to_label.get(target_id, target_id)
+                branch[digit] = target_label
+                valid_choices.append(digit)
+            elif 'retry' in label or 'repeat' in label or 'invalid' in label:
+                # Self-reference for retries
+                branch["error"] = ivr_node["label"]
+        
+        # Add default handling
+        if branch:
+            ivr_node["branch"] = branch
+            ivr_node["getDigits"]["validChoices"] = "|".join(sorted(valid_choices))
+            # Add error handling
+            if "error" not in branch:
+                branch["error"] = ivr_node["label"]  # Self-reference for retries
+        
+        # Add retry logic (allflows LITE pattern)
+        ivr_node["maxLoop"] = ["Loop-Main", 3, "Problems"]
+
+    def _add_pin_logic_with_mapping(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]):
+        """Add PIN entry logic following allflows patterns with proper label mapping"""
+        ivr_node["getDigits"] = {
+            "numDigits": 5,  # 4 digits + pound (allflows LITE pattern)
+            "maxTries": 3,
+            "maxTime": 7,
+            "validChoices": "{{pin}}",  # Dynamic PIN validation
+            "errorPrompt": "callflow:1009",
+            "nonePrompt": "callflow:1009"
+        }
+        
+        # Add branch logic for validation
+        if connections:
+            branch = {}
+            for conn in connections:
+                if 'yes' in conn['label'].lower() or 'correct' in conn['label'].lower() or 'valid' in conn['label'].lower():
+                    target_id = conn['target']
+                    target_label = node_id_to_label.get(target_id, target_id)
+                    branch["match"] = target_label
+                elif 'no' in conn['label'].lower() or 'invalid' in conn['label'].lower() or 'retry' in conn['label'].lower():
+                    target_id = conn['target']
+                    target_label = node_id_to_label.get(target_id, target_id)
+                    branch["nomatch"] = target_label
+            
+            if branch:
+                ivr_node["branch"] = branch
+            
+        # Add retry handling
+        ivr_node["maxLoop"] = ["Loop-PIN", 3, "Problems"]
+
+    def _add_availability_logic_with_mapping(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]):
+        """Add availability check logic following allflows patterns with proper label mapping"""
+        ivr_node["getDigits"] = {
+            "numDigits": 1,
+            "maxTries": 3,
+            "maxTime": 7,
+            "validChoices": "1|3|0",  # Standard availability choices
+            "errorPrompt": "callflow:1009",
+            "nonePrompt": "callflow:1009"
+        }
+        
+        branch = {}
+        for conn in connections:
+            label = conn['label'].lower()
+            target_id = conn['target']
+            target_label = node_id_to_label.get(target_id, target_id)
+            
+            if '1' in label or 'accept' in label:
+                branch["1"] = target_label
+            elif '3' in label or 'decline' in label:
+                branch["3"] = target_label
+            elif '0' in label or 'call back' in label or '9' in label:
+                branch["0"] = target_label
+            elif 'invalid' in label or 'retry' in label:
+                branch["error"] = target_label
+        
+        # Add default error handling if not specified
+        if "error" not in branch:
+            branch["error"] = "Invalid Entry"
+        if "timeout" not in branch:
+            branch["timeout"] = "Invalid Entry"
+        
+        if branch:
+            ivr_node["branch"] = branch
+        
+        ivr_node["maxLoop"] = ["Loop-Availability", 3, "Problems"]
+
+    def _add_sleep_logic_with_mapping(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]):
+        """Add sleep/wait logic following allflows patterns with proper label mapping"""
+        ivr_node["getDigits"] = {
+            "numDigits": 1,
+            "maxTime": 30,  # 30-second timeout (allflows LITE pattern)
+            "validChoices": "1|2|3|4|5|6|7|8|9|0|*|#",
+            "errorPrompt": "callflow:1009",
+            "nonePrompt": "callflow:1009"
+        }
+        
+        # Default behavior for any key press or timeout
+        if connections:
+            target_id = connections[0]['target']
+            target_label = node_id_to_label.get(target_id, target_id)
+            ivr_node["branch"] = {
+                "next": target_label,
+                "none": target_label  # Same destination for timeout
+            }
+        else:
+            ivr_node["branch"] = {
+                "next": "Live Answer",
+                "none": "Live Answer"
+            }
+
+    def _add_decision_logic_with_mapping(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]):
+        """Add decision logic for multiple choice nodes with proper label mapping"""
+        ivr_node["getDigits"] = {
+            "numDigits": 1,
+            "maxTries": 3,
+            "maxTime": 7,
+            "validChoices": "",
+            "errorPrompt": "callflow:1009",
+            "nonePrompt": "callflow:1009"
+        }
+        
+        branch = {}
+        valid_choices = []
+        
+        for conn in connections:
+            digit_match = re.search(r'(\d+)', conn['label'])
+            if digit_match:
+                digit = digit_match.group(1)
+                target_id = conn['target']
+                target_label = node_id_to_label.get(target_id, target_id)
+                branch[digit] = target_label
+                valid_choices.append(digit)
+            elif 'yes' in conn['label'].lower():
+                target_id = conn['target']
+                target_label = node_id_to_label.get(target_id, target_id)
+                branch["yes"] = target_label
+            elif 'no' in conn['label'].lower():
+                target_id = conn['target']
+                target_label = node_id_to_label.get(target_id, target_id)
+                branch["no"] = target_label
+        
+        # Add error handling
+        if "error" not in branch:
+            branch["error"] = "Invalid Entry"
+        
+        if branch:
+            ivr_node["branch"] = branch
+            if valid_choices:
+                ivr_node["getDigits"]["validChoices"] = "|".join(valid_choices)
+        
+        ivr_node["maxLoop"] = ["Loop-Decision", 3, "Problems"]
+
+    def _add_response_logic(self, ivr_node: Dict[str, Any], label: str, notes: List[str]):
+        """Add response handler logic following allflows patterns"""
+        label_lower = label.lower()
+        
+        # Add gosub for response recording (allflows LITE pattern)
+        if 'accept' in label_lower:
+            ivr_node["gosub"] = self.response_codes['accept']
+        elif 'decline' in label_lower:
+            ivr_node["gosub"] = self.response_codes['decline']
+        elif 'not home' in label_lower:
+            ivr_node["gosub"] = self.response_codes['not_home']
+        elif 'qualified' in label_lower:
+            ivr_node["gosub"] = self.response_codes['qualified_no']
+        else:
+            ivr_node["gosub"] = self.response_codes['error']
+        
+        # Add nobarge for non-interruptible response messages
+        ivr_node["nobarge"] = "1"
+        
+        # Always go to Goodbye after response
+        ivr_node["goto"] = "Goodbye"
+
+    def _ensure_standard_handlers(self, ivr_nodes: List[Dict[str, Any]], used_labels: Set[str], notes: List[str]):
+        """Ensure standard handler nodes exist following allflows LITE patterns"""
+        existing_labels = {node.get('label') for node in ivr_nodes}
+        
+        # Add Problems handler if missing
+        if 'Problems' not in existing_labels:
+            problems_node = {
+                "label": "Problems",
+                "gosub": self.response_codes['error']
+            }
+            # Add the actual problem message components
+            ivr_nodes.append(problems_node)
+            
+            # Add the message part
+            problems_message = {
+                "nobarge": "1",
+                "playLog": ["I'm sorry you are having problems.", "Please have", "Employee name"],
+                "playPrompt": ["callflow:1351", "callflow:1017", "names:{{contact_id}}"]
+            }
+            ivr_nodes.append(problems_message)
+            
+            # Add call instructions
+            problems_call = {
+                "log": "call the",
+                "playPrompt": "callflow:1174"
+            }
+            ivr_nodes.append(problems_call)
+            
+            # Add final part
+            problems_final = {
+                "nobarge": "1",
+                "playLog": ["APS", "callout system", "at", "speak phone num"],
+                "playPrompt": ["location:{{level2_location}}", "callflow:1290", "callflow:1015", "digits:{{callback_number}}"],
+                "goto": "Goodbye"
+            }
+            ivr_nodes.append(problems_final)
+            
+            notes.append("Added complete Problems handler with multi-object structure")
+        
+        # Add Goodbye handler if missing
+        if 'Goodbye' not in existing_labels:
+            goodbye_node = {
+                "label": "Goodbye",
+                "log": "Goodbye(1029)",
+                "playPrompt": "callflow:1029",
+                "nobarge": "1",
+                "goto": "hangup"
+            }
+            ivr_nodes.append(goodbye_node)
+            notes.append("Added Goodbye handler")
+
+    def _create_fallback_flow(self) -> List[Dict[str, Any]]:
+        """Create fallback flow when parsing fails"""
+        return [
+            {
+                "label": "Live Answer",
+                "log": "Welcome message",
+                "playPrompt": "callflow:Welcome",
+                "goto": "Problems"
+            },
+            {
+                "label": "Problems",
+                "log": "Error handler",
+                "playPrompt": "callflow:1351",
+                "goto": "Goodbye"
+            },
+            {
+                "label": "Goodbye",
+                "log": "Goodbye message",
+                "playPrompt": "callflow:1029",
+                "goto": "hangup"
+            }
+        ]
+
+
+def convert_mermaid_to_ivr(mermaid_code: str) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Main conversion function using sophisticated database-driven approach"""
+    converter = DatabaseDrivenIVRConverter()
+    return converter.convert(mermaid_code)
+
+
+# Enhanced Format IVR Output Functions for allflows LITE compatibility
+def format_ivr_output(ivr_nodes: List[Dict[str, Any]]) -> str:
+    """
+    Format IVR nodes into production-ready JavaScript module.exports format
+    Enhanced for full allflows LITE compatibility
+    """
+    if not ivr_nodes:
+        return "module.exports = [];"
+    
+    # Clean and format the nodes following allflows property order
+    formatted_nodes = []
+    
+    for node in ivr_nodes:
+        # Ensure all nodes have required fields
+        clean_node = {}
+        
+        # Property order from allflows: label → log/playLog → playPrompt → getDigits → branch → maxLoop → gosub → goto → nobarge → guard
+        
+        # 1. Label (required)
+        if 'label' in node:
+            clean_node['label'] = node['label']
+        
+        # 2. Log/PlayLog (documentation)
+        if 'playLog' in node:
+            clean_node['playLog'] = node['playLog']
+        elif 'log' in node:
+            clean_node['log'] = node['log']
+        
+        # 3. PlayPrompt (voice files)
+        if 'playPrompt' in node:
+            clean_node['playPrompt'] = node['playPrompt']
+        
+        # 4. GetDigits (input collection)
+        if 'getDigits' in node:
+            clean_node['getDigits'] = node['getDigits']
+        
+        # 5. Branch (conditional navigation)
+        if 'branch' in node:
+            clean_node['branch'] = node['branch']
+        
+        # 6. MaxLoop (retry logic)
+        if 'maxLoop' in node:
+            clean_node['maxLoop'] = node['maxLoop']
+        
+        # 7. Gosub (subroutine calls)
+        if 'gosub' in node:
+            clean_node['gosub'] = node['gosub']
+        
+        # 8. Goto (direct transitions)
+        if 'goto' in node:
+            clean_node['goto'] = node['goto']
+        
+        # 9. Nobarge (non-interruptible)
+        if 'nobarge' in node:
+            clean_node['nobarge'] = node['nobarge']
+        
+        # 10. Guard (conditional execution) - allflows LITE pattern
+        if 'guard' in node:
+            clean_node['guard'] = node['guard']
+        
+        # Add any other properties that might be present
+        for key, value in node.items():
+            if key not in clean_node:
+                clean_node[key] = value
+        
+        formatted_nodes.append(clean_node)
+    
+    # Convert to JavaScript format with proper formatting
+    try:
+        # Use enhanced JavaScript formatting for allflows LITE compatibility
+        js_output = _format_as_javascript_enhanced(formatted_nodes)
+        return f"module.exports = {js_output};"
+        
+    except Exception as e:
+        # Fallback to basic JSON formatting
+        json_str = json.dumps(formatted_nodes, indent=2)
+        return f"module.exports = {json_str};"
+
+def _format_as_javascript_enhanced(nodes: List[Dict[str, Any]]) -> str:
+    """Enhanced format nodes as JavaScript array with allflows LITE compatibility"""
+    lines = ["["]
+    
+    for i, node in enumerate(nodes):
+        lines.append("    {")
+        
+        # Format each property with enhanced handling
+        for j, (key, value) in enumerate(node.items()):
+            formatted_value = _format_js_value_enhanced(value)
+            comma = "," if j < len(node) - 1 else ""
+            lines.append(f'        {key}: {formatted_value}{comma}')
+        
+        closer = "    }," if i < len(nodes) - 1 else "    }"
+        lines.append(closer)
+    
+    lines.append("]")
+    
+    return "\n".join(lines)
+
+def _format_js_value_enhanced(value: Any) -> str:
+    """Enhanced format a value for JavaScript output with guard function support"""
+    if isinstance(value, str):
+        # Special handling for guard functions (allflows LITE pattern)
+        if value.startswith("function"):
+            return value  # Don't quote function definitions
+        else:
+            return f'"{value}"'
+    elif isinstance(value, list):
+        if not value:
+            return "[]"
+        
+        # Check if all items are strings
+        if all(isinstance(item, str) for item in value):
+            formatted_items = [f'"{item}"' for item in value]
+            if len(formatted_items) == 1:
+                return f'[{formatted_items[0]}]'
+            else:
+                return "[\n            " + ",\n            ".join(formatted_items) + "\n        ]"
+        else:
+            # Mixed types - use JSON formatting but handle special cases
+            formatted_items = []
+            for item in value:
+                if isinstance(item, str):
+                    formatted_items.append(f'"{item}"')
+                else:
+                    formatted_items.append(str(item))
+            
+            if len(formatted_items) == 1:
+                return f'[{formatted_items[0]}]'
+            else:
+                return "[" + ", ".join(formatted_items) + "]"
+    
+    elif isinstance(value, dict):
+        if not value:
+            return "{}"
+        
+        lines = ["{"]
+        items = list(value.items())
+        for j, (k, v) in enumerate(items):
+            formatted_v = _format_js_value_enhanced(v)
+            comma = "," if j < len(items) - 1 else ""
+            lines.append(f'            {k}: {formatted_v}{comma}')
+        lines.append("        }")
+        
+        return "\n        ".join(lines)
+    
+    elif isinstance(value, bool):
+        return "true" if value else "false"
+    elif value is None:
+        return "null"
+    else:
+        return str(value)
+
+# Enhanced validation function for the generated IVR code
+def validate_ivr_nodes(ivr_nodes: List[Dict[str, Any]]) -> List[str]:
+    """Enhanced validate IVR nodes and return list of issues found"""
+    issues = []
+    labels = set()
+    
+    for i, node in enumerate(ivr_nodes):
+        # Check required fields
+        if 'label' not in node:
+            issues.append(f"Node {i}: Missing required 'label' field")
+        else:
+            label = node['label']
+            if label in labels:
+                issues.append(f"Node {i}: Duplicate label '{label}'")
+            labels.add(label)
+        
+        # Check branch targets
+        if 'branch' in node:
+            for digit, target in node['branch'].items():
+                if target not in labels and target not in ['Problems', 'Goodbye', 'hangup']:
+                    issues.append(f"Node {i}: Branch target '{target}' not found")
+        
+        # Check goto targets
+        if 'goto' in node:
+            target = node['goto']
+            if target not in labels and target not in ['Problems', 'Goodbye', 'hangup']:
+                issues.append(f"Node {i}: Goto target '{target}' not found")
+        
+        # Check getDigits structure
+        if 'getDigits' in node:
+            get_digits = node['getDigits']
+            if not isinstance(get_digits, dict):
+                issues.append(f"Node {i}: getDigits must be an object")
+            else:
+                required_fields = ['numDigits', 'validChoices']
+                for field in required_fields:
+                    if field not in get_digits:
+                        issues.append(f"Node {i}: getDigits missing '{field}' field")
+        
+        # Check gosub structure (allflows LITE pattern)
+        if 'gosub' in node:
+            gosub = node['gosub']
+            if not isinstance(gosub, list) or len(gosub) != 3:
+                issues.append(f"Node {i}: gosub must be array of 3 elements [function, code, description]")
+        
+        # Check guard function syntax
+        if 'guard' in node:
+            guard = node['guard']
+            if not isinstance(guard, str) or not guard.startswith('function'):
+                issues.append(f"Node {i}: guard must be a function string")
+    
+    return issues
+, before_bracket)
+                            if id_match:
+                                target_id = id_match.group(1)
+                                if target_id not in node_texts:  # Don't overwrite existing text
+                                    # Extract text between quotes
+                                    target_text = target_part[quote_start + 1:quote_end]
+                                    # Clean HTML tags from text
+                                    target_text = re.sub(r'<br\s*/?>', ' ', target_text)
+                                    target_text = re.sub(r'<[^>]+>', '', target_text)
+                                    node_texts[target_id] = target_text.strip()
+                    
+                    if not target_id:
+                        # Fallback to simple ID extraction
+                        simple_match = re.match(r'^([A-Z]+)', target_part)
+                        if simple_match:
+                            target_id = simple_match.group(1)
+                    
+                    # Add connection if we found both IDs
+                    if source_id and target_id:
+                        connections.append({
+                            'source': source_id,
+                            'target': target_id,
+                            'label': connection_label
+                        })
                         
-                        # Extract target node - handle both rectangular and diamond shapes
-                        target_match = re.search(r'([A-Z]+)(?:\[([^\]]+)\]|\{([^}]+)\})?', target_part)
-                        if target_match:
-                            target_id = target_match.group(1)
-                            target_text = target_match.group(2) or target_match.group(3) or target_id
-                            # Clean HTML tags from text
-                            target_text = re.sub(r'<br\s*/?>', ' ', target_text)
-                            target_text = re.sub(r'<[^>]+>', '', target_text)
-                            node_texts[target_id] = target_text.strip()
-                            
-                            # Add connection
-                            connections.append({
-                                'source': source_id,
-                                'target': target_id,
-                                'label': connection_label
-                            })
                 except Exception as e:
                     print(f"Error parsing line: {line} - {e}")
                     continue
+        
+        # Fallback: If we still don't have text for a node, try to extract it more aggressively
+        for line in lines:
+            if '-->' not in line and not line.startswith('flowchart'):
+                # Try to match any node definition pattern
+                fallback_match = re.search(r'([A-Z]+)\s*[\[{]"([^"]+)"[\]}]', line)
+                if fallback_match:
+                    node_id = fallback_match.group(1)
+                    if node_id not in node_texts:
+                        node_text = fallback_match.group(2)
+                        node_text = re.sub(r'<br\s*/?>', ' ', node_text)
+                        node_text = re.sub(r'<[^>]+>', '', node_text)
+                        node_texts[node_id] = node_text.strip()
+        
+        # Create node objects with proper classification
+        for node_id, node_text in node_texts.items():
+            # Generate descriptive label
+            label = self._generate_descriptive_label(node_text, connections, node_id)
+            
+            # Classify node type
+            node_type = self._classify_node_type(node_text, connections, node_id)
+            
+            nodes.append({
+                'id': node_id,
+                'text': node_text,
+                'label': label,
+                'type': node_type
+            })
+        
+        return nodes, connections
+
+    def _classify_node_type(self, text: str, connections: List[Dict[str, str]], node_id: str) -> NodeType:
+        """Classify node type for proper IVR generation"""
+        text_lower = text.lower()
+        
+        # Analyze outgoing connections to help classification
+        outgoing_connections = [conn for conn in connections if conn['source'] == node_id]
+        has_multiple_choices = len(outgoing_connections) > 1
+        
+        if 'welcome' in text_lower or ('this is an' in text_lower and 'press' in text_lower):
+            return NodeType.WELCOME
+        elif 'pin' in text_lower and 'enter' in text_lower:
+            return NodeType.PIN_ENTRY
+        elif 'available' in text_lower and 'callout' in text_lower:
+            return NodeType.AVAILABILITY
+        elif 'accept' in text_lower or 'decline' in text_lower or 'not home' in text_lower:
+            return NodeType.RESPONSE
+        elif 'goodbye' in text_lower or 'thank you' in text_lower:
+            return NodeType.GOODBYE
+        elif 'problems' in text_lower or 'error' in text_lower:
+            return NodeType.ERROR
+        elif 'press any key' in text_lower or '30-second' in text_lower:
+            return NodeType.SLEEP
+        elif has_multiple_choices or ('?' in text_lower and len(outgoing_connections) > 0):
+            return NodeType.DECISION
+        else:
+            return NodeType.ACTION
+
+    def _generate_descriptive_label(self, text: str, connections: List[Dict[str, str]], node_id: str) -> str:
+        """Generate descriptive label following Andres's conventions"""
+        text_lower = text.lower()
+        
+        # Welcome/opening nodes
+        if 'welcome' in text_lower or ('this is an' in text_lower and 'callout' in text_lower):
+            return "Live Answer"
+        
+        # PIN related
+        elif 'pin' in text_lower and 'enter' in text_lower:
+            return "Enter PIN"
+        elif 'pin' in text_lower and ('correct' in text_lower or 'valid' in text_lower):
+            return "PIN Validation"
+        elif 'invalid' in text_lower and ('pin' in text_lower or 'entry' in text_lower):
+            return "Invalid Entry"
+        
+        # Availability
+        elif 'available' in text_lower and 'callout' in text_lower:
+            return "Available For Callout"
+        
+        # Responses (following allflows patterns)
+        elif 'accept' in text_lower and 'response' in text_lower:
+            return "Accept"
+        elif 'decline' in text_lower:
+            return "Decline"
+        elif 'not home' in text_lower:
+            return "Not Home"
+        elif 'qualified' in text_lower or 'call back' in text_lower:
+            return "Qualified No"
+        
+        # System messages
+        elif 'goodbye' in text_lower:
+            return "Goodbye"
+        elif 'thank you' in text_lower:
+            return "Goodbye"
+        elif 'problems' in text_lower:
+            return "Problems"
+        elif 'press any key' in text_lower or '30-second' in text_lower:
+            return "Sleep"
+        
+        # Callout information
+        elif 'callout reason' in text_lower:
+            return "Callout Reason"
+        elif 'trouble location' in text_lower:
+            return "Trouble Location"
+        elif 'custom message' in text_lower:
+            return "Custom Message"
+        elif 'electric callout' in text_lower:
+            return "Electric Callout"
+        
+        # Fallback to meaningful name
+        else:
+            # Extract key words for label
+            words = re.findall(r'\b[A-Z][a-z]+', text)
+            if words:
+                return ' '.join(words[:2])
+            else:
+                return node_id.title()
+
+    def _generate_database_driven_flow(self, nodes: List[Dict[str, Any]], connections: List[Dict[str, str]], notes: List[str]) -> List[Dict[str, Any]]:
+        """Generate complete IVR flow using database-driven approach with allflows LITE patterns"""
+        if not nodes:
+            notes.append("No nodes to process")
+            return []
+            
+        ivr_nodes = []
+        used_labels = set()
+        
+        # Create a mapping of node IDs to their generated labels for cross-referencing
+        node_id_to_label = {}
+        
+        # First pass: Generate labels for all nodes
+        for node in nodes:
+            label = node['label']
+            counter = 2
+            while label in used_labels:
+                label = f"{node['label']} {counter}"
+                counter += 1
+            used_labels.add(label)
+            node_id_to_label[node['id']] = label
+        
+        # Second pass: Generate IVR nodes with proper cross-references
+        for node in nodes:
+            label = node_id_to_label[node['id']]
+            
+            # Generate IVR node(s) based on type and complexity
+            node_connections = [conn for conn in connections if conn['source'] == node['id']]
+            
+            # Check if we should create multi-object nodes (glommer nodes)
+            if self._should_split_into_glommer_nodes(node['text']) and node.get('type') == NodeType.WELCOME:
+                generated_nodes = self._create_multi_object_welcome_node(node, label, node_connections, node_id_to_label, notes)
+            else:
+                generated_nodes = self._create_database_node_with_mapping(node, label, node_connections, node_id_to_label, notes)
+            
+            for ivr_node in generated_nodes:
+                # Add nobarge where appropriate
+                if node.get('type') in [NodeType.RESPONSE, NodeType.GOODBYE, NodeType.ERROR]:
+                    ivr_node["nobarge"] = "1"
+                ivr_nodes.append(ivr_node)
+        
+        # Add standard handlers if not present
+        self._ensure_standard_handlers(ivr_nodes, used_labels, notes)
+        
+        return ivr_nodes
+
+    def _create_multi_object_welcome_node(self, node: Dict[str, Any], label: str, connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]) -> List[Dict[str, Any]]:
+        """Create multi-object welcome node following allflows LITE patterns"""
+        text = node['text']
+        segments, variables = self._intelligent_segmentation(text)
+        play_log, play_prompt = self._generate_database_prompts(segments, variables, notes)
+        
+        nodes = []
+        
+        # Object 1: Main callout information (first part)
+        main_segments = 5  # Split at reasonable boundary
+        main_node = {
+            "label": label
+        }
+        
+        if len(play_log) > main_segments:
+            main_node["playLog"] = play_log[:main_segments]
+            main_node["playPrompt"] = play_prompt[:main_segments]
+        else:
+            main_node["playLog"] = play_log
+            main_node["playPrompt"] = play_prompt
+        
+        nodes.append(main_node)
+        
+        # Object 2: Environment check (if not production) - allflows LITE pattern
+        env_node = {
+            "log": "environment",
+            "guard": "function (){ return this.data.env!='prod' && this.data.env!='PROD' }",
+            "playPrompt": "callflow:{{env}}",
+            "nobarge": "1"
+        }
+        nodes.append(env_node)
+        
+        # Object 3: Menu options with getDigits (remaining segments)
+        menu_node = {}
+        
+        if len(play_log) > main_segments:
+            menu_node["playLog"] = play_log[main_segments:]
+            menu_node["playPrompt"] = play_prompt[main_segments:]
+        else:
+            menu_node["playLog"] = ["Menu options"]
+            menu_node["playPrompt"] = ["callflow:MenuOptions"]
+        
+        # Add getDigits and branch logic
+        self._add_welcome_logic_with_mapping(menu_node, connections, node_id_to_label, notes)
+        nodes.append(menu_node)
+        
+        notes.append(f"Created multi-object welcome node with {len(nodes)} components")
+        
+        return nodes
+
+    def _create_database_node_with_mapping(self, node: Dict[str, Any], label: str, connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]) -> List[Dict[str, Any]]:
+        """Create IVR node(s) using database matching with proper label mapping"""
+        text = node['text']
+        node_type = node.get('type', NodeType.ACTION)
+        
+        # Intelligent segmentation using database
+        segments, variables = self._intelligent_segmentation(text)
+        play_log, play_prompt = self._generate_database_prompts(segments, variables, notes)
+        
+        # Create base node following allflows property order
+        ivr_node = {}
+        
+        # Property order: label → playLog → playPrompt → getDigits → branch → maxLoop → gosub → goto → nobarge
+        ivr_node["label"] = label
+        
+        if len(play_log) > 1:
+            ivr_node["playLog"] = play_log
+        elif play_log:
+            ivr_node["log"] = play_log[0]  # Single log entry uses "log" instead of "playLog"
+        
+        if len(play_prompt) > 1:
+            ivr_node["playPrompt"] = play_prompt
+        elif play_prompt:
+            ivr_node["playPrompt"] = play_prompt[0]
+        
+        # Add interaction logic based on node type and connections
+        if node_type == NodeType.WELCOME and connections:
+            self._add_welcome_logic_with_mapping(ivr_node, connections, node_id_to_label, notes)
+        elif node_type == NodeType.PIN_ENTRY:
+            self._add_pin_logic_with_mapping(ivr_node, connections, node_id_to_label, notes)
+        elif node_type == NodeType.AVAILABILITY and connections:
+            self._add_availability_logic_with_mapping(ivr_node, connections, node_id_to_label, notes)
+        elif node_type == NodeType.RESPONSE:
+            self._add_response_logic(ivr_node, label, notes)
+        elif node_type == NodeType.SLEEP:
+            self._add_sleep_logic_with_mapping(ivr_node, connections, node_id_to_label, notes)
+        elif connections and len(connections) > 1:
+            self._add_decision_logic_with_mapping(ivr_node, connections, node_id_to_label, notes)
+        elif connections and len(connections) == 1:
+            target_id = connections[0]['target']
+            target_label = node_id_to_label.get(target_id, target_id)
+            ivr_node["goto"] = target_label
+        
+        return [ivr_node]
+
+    def _add_welcome_logic_with_mapping(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]):
+        """Add welcome node logic following allflows patterns with proper label mapping"""
+        ivr_node["getDigits"] = {
+            "numDigits": 1,
+            "maxTime": 1,  # Very short timeout for main menu (allflows LITE pattern)
+            "validChoices": "",
+            "errorPrompt": "callflow:1009"
+        }
+        
+        branch = {}
+        valid_choices = []
+        
+        for conn in connections:
+            label = conn['label'].lower()
+            digit_match = re.search(r'(\d+)', label)
+            
+            if digit_match:
+                digit = digit_match.group(1)
+                target_id = conn['target']
+                target_label = node_id_to_label.get(target_id, target_id)
+                branch[digit] = target_label
+                valid_choices.append(digit)
+            elif 'retry' in label or 'repeat' in label or 'invalid' in label:
+                # Self-reference for retries
+                branch["error"] = ivr_node["label"]
+        
+        # Add default handling
+        if branch:
+            ivr_node["branch"] = branch
+            ivr_node["getDigits"]["validChoices"] = "|".join(sorted(valid_choices))
+            # Add error handling
+            if "error" not in branch:
+                branch["error"] = ivr_node["label"]  # Self-reference for retries
+        
+        # Add retry logic (allflows LITE pattern)
+        ivr_node["maxLoop"] = ["Loop-Main", 3, "Problems"]
+
+    def _add_pin_logic_with_mapping(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]):
+        """Add PIN entry logic following allflows patterns with proper label mapping"""
+        ivr_node["getDigits"] = {
+            "numDigits": 5,  # 4 digits + pound (allflows LITE pattern)
+            "maxTries": 3,
+            "maxTime": 7,
+            "validChoices": "{{pin}}",  # Dynamic PIN validation
+            "errorPrompt": "callflow:1009",
+            "nonePrompt": "callflow:1009"
+        }
+        
+        # Add branch logic for validation
+        if connections:
+            branch = {}
+            for conn in connections:
+                if 'yes' in conn['label'].lower() or 'correct' in conn['label'].lower() or 'valid' in conn['label'].lower():
+                    target_id = conn['target']
+                    target_label = node_id_to_label.get(target_id, target_id)
+                    branch["match"] = target_label
+                elif 'no' in conn['label'].lower() or 'invalid' in conn['label'].lower() or 'retry' in conn['label'].lower():
+                    target_id = conn['target']
+                    target_label = node_id_to_label.get(target_id, target_id)
+                    branch["nomatch"] = target_label
+            
+            if branch:
+                ivr_node["branch"] = branch
+            
+        # Add retry handling
+        ivr_node["maxLoop"] = ["Loop-PIN", 3, "Problems"]
+
+    def _add_availability_logic_with_mapping(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]):
+        """Add availability check logic following allflows patterns with proper label mapping"""
+        ivr_node["getDigits"] = {
+            "numDigits": 1,
+            "maxTries": 3,
+            "maxTime": 7,
+            "validChoices": "1|3|0",  # Standard availability choices
+            "errorPrompt": "callflow:1009",
+            "nonePrompt": "callflow:1009"
+        }
+        
+        branch = {}
+        for conn in connections:
+            label = conn['label'].lower()
+            target_id = conn['target']
+            target_label = node_id_to_label.get(target_id, target_id)
+            
+            if '1' in label or 'accept' in label:
+                branch["1"] = target_label
+            elif '3' in label or 'decline' in label:
+                branch["3"] = target_label
+            elif '0' in label or 'call back' in label or '9' in label:
+                branch["0"] = target_label
+            elif 'invalid' in label or 'retry' in label:
+                branch["error"] = target_label
+        
+        # Add default error handling if not specified
+        if "error" not in branch:
+            branch["error"] = "Invalid Entry"
+        if "timeout" not in branch:
+            branch["timeout"] = "Invalid Entry"
+        
+        if branch:
+            ivr_node["branch"] = branch
+        
+        ivr_node["maxLoop"] = ["Loop-Availability", 3, "Problems"]
+
+    def _add_sleep_logic_with_mapping(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]):
+        """Add sleep/wait logic following allflows patterns with proper label mapping"""
+        ivr_node["getDigits"] = {
+            "numDigits": 1,
+            "maxTime": 30,  # 30-second timeout (allflows LITE pattern)
+            "validChoices": "1|2|3|4|5|6|7|8|9|0|*|#",
+            "errorPrompt": "callflow:1009",
+            "nonePrompt": "callflow:1009"
+        }
+        
+        # Default behavior for any key press or timeout
+        if connections:
+            target_id = connections[0]['target']
+            target_label = node_id_to_label.get(target_id, target_id)
+            ivr_node["branch"] = {
+                "next": target_label,
+                "none": target_label  # Same destination for timeout
+            }
+        else:
+            ivr_node["branch"] = {
+                "next": "Live Answer",
+                "none": "Live Answer"
+            }
+
+    def _add_decision_logic_with_mapping(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]):
+        """Add decision logic for multiple choice nodes with proper label mapping"""
+        ivr_node["getDigits"] = {
+            "numDigits": 1,
+            "maxTries": 3,
+            "maxTime": 7,
+            "validChoices": "",
+            "errorPrompt": "callflow:1009",
+            "nonePrompt": "callflow:1009"
+        }
+        
+        branch = {}
+        valid_choices = []
+        
+        for conn in connections:
+            digit_match = re.search(r'(\d+)', conn['label'])
+            if digit_match:
+                digit = digit_match.group(1)
+                target_id = conn['target']
+                target_label = node_id_to_label.get(target_id, target_id)
+                branch[digit] = target_label
+                valid_choices.append(digit)
+            elif 'yes' in conn['label'].lower():
+                target_id = conn['target']
+                target_label = node_id_to_label.get(target_id, target_id)
+                branch["yes"] = target_label
+            elif 'no' in conn['label'].lower():
+                target_id = conn['target']
+                target_label = node_id_to_label.get(target_id, target_id)
+                branch["no"] = target_label
+        
+        # Add error handling
+        if "error" not in branch:
+            branch["error"] = "Invalid Entry"
+        
+        if branch:
+            ivr_node["branch"] = branch
+            if valid_choices:
+                ivr_node["getDigits"]["validChoices"] = "|".join(valid_choices)
+        
+        ivr_node["maxLoop"] = ["Loop-Decision", 3, "Problems"]
+
+    def _add_response_logic(self, ivr_node: Dict[str, Any], label: str, notes: List[str]):
+        """Add response handler logic following allflows patterns"""
+        label_lower = label.lower()
+        
+        # Add gosub for response recording (allflows LITE pattern)
+        if 'accept' in label_lower:
+            ivr_node["gosub"] = self.response_codes['accept']
+        elif 'decline' in label_lower:
+            ivr_node["gosub"] = self.response_codes['decline']
+        elif 'not home' in label_lower:
+            ivr_node["gosub"] = self.response_codes['not_home']
+        elif 'qualified' in label_lower:
+            ivr_node["gosub"] = self.response_codes['qualified_no']
+        else:
+            ivr_node["gosub"] = self.response_codes['error']
+        
+        # Add nobarge for non-interruptible response messages
+        ivr_node["nobarge"] = "1"
+        
+        # Always go to Goodbye after response
+        ivr_node["goto"] = "Goodbye"
+
+    def _ensure_standard_handlers(self, ivr_nodes: List[Dict[str, Any]], used_labels: Set[str], notes: List[str]):
+        """Ensure standard handler nodes exist following allflows LITE patterns"""
+        existing_labels = {node.get('label') for node in ivr_nodes}
+        
+        # Add Problems handler if missing
+        if 'Problems' not in existing_labels:
+            problems_node = {
+                "label": "Problems",
+                "gosub": self.response_codes['error']
+            }
+            # Add the actual problem message components
+            ivr_nodes.append(problems_node)
+            
+            # Add the message part
+            problems_message = {
+                "nobarge": "1",
+                "playLog": ["I'm sorry you are having problems.", "Please have", "Employee name"],
+                "playPrompt": ["callflow:1351", "callflow:1017", "names:{{contact_id}}"]
+            }
+            ivr_nodes.append(problems_message)
+            
+            # Add call instructions
+            problems_call = {
+                "log": "call the",
+                "playPrompt": "callflow:1174"
+            }
+            ivr_nodes.append(problems_call)
+            
+            # Add final part
+            problems_final = {
+                "nobarge": "1",
+                "playLog": ["APS", "callout system", "at", "speak phone num"],
+                "playPrompt": ["location:{{level2_location}}", "callflow:1290", "callflow:1015", "digits:{{callback_number}}"],
+                "goto": "Goodbye"
+            }
+            ivr_nodes.append(problems_final)
+            
+            notes.append("Added complete Problems handler with multi-object structure")
+        
+        # Add Goodbye handler if missing
+        if 'Goodbye' not in existing_labels:
+            goodbye_node = {
+                "label": "Goodbye",
+                "log": "Goodbye(1029)",
+                "playPrompt": "callflow:1029",
+                "nobarge": "1",
+                "goto": "hangup"
+            }
+            ivr_nodes.append(goodbye_node)
+            notes.append("Added Goodbye handler")
+
+    def _create_fallback_flow(self) -> List[Dict[str, Any]]:
+        """Create fallback flow when parsing fails"""
+        return [
+            {
+                "label": "Live Answer",
+                "log": "Welcome message",
+                "playPrompt": "callflow:Welcome",
+                "goto": "Problems"
+            },
+            {
+                "label": "Problems",
+                "log": "Error handler",
+                "playPrompt": "callflow:1351",
+                "goto": "Goodbye"
+            },
+            {
+                "label": "Goodbye",
+                "log": "Goodbye message",
+                "playPrompt": "callflow:1029",
+                "goto": "hangup"
+            }
+        ]
+
+
+def convert_mermaid_to_ivr(mermaid_code: str) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Main conversion function using sophisticated database-driven approach"""
+    converter = DatabaseDrivenIVRConverter()
+    return converter.convert(mermaid_code)
+
+
+# Enhanced Format IVR Output Functions for allflows LITE compatibility
+def format_ivr_output(ivr_nodes: List[Dict[str, Any]]) -> str:
+    """
+    Format IVR nodes into production-ready JavaScript module.exports format
+    Enhanced for full allflows LITE compatibility
+    """
+    if not ivr_nodes:
+        return "module.exports = [];"
+    
+    # Clean and format the nodes following allflows property order
+    formatted_nodes = []
+    
+    for node in ivr_nodes:
+        # Ensure all nodes have required fields
+        clean_node = {}
+        
+        # Property order from allflows: label → log/playLog → playPrompt → getDigits → branch → maxLoop → gosub → goto → nobarge → guard
+        
+        # 1. Label (required)
+        if 'label' in node:
+            clean_node['label'] = node['label']
+        
+        # 2. Log/PlayLog (documentation)
+        if 'playLog' in node:
+            clean_node['playLog'] = node['playLog']
+        elif 'log' in node:
+            clean_node['log'] = node['log']
+        
+        # 3. PlayPrompt (voice files)
+        if 'playPrompt' in node:
+            clean_node['playPrompt'] = node['playPrompt']
+        
+        # 4. GetDigits (input collection)
+        if 'getDigits' in node:
+            clean_node['getDigits'] = node['getDigits']
+        
+        # 5. Branch (conditional navigation)
+        if 'branch' in node:
+            clean_node['branch'] = node['branch']
+        
+        # 6. MaxLoop (retry logic)
+        if 'maxLoop' in node:
+            clean_node['maxLoop'] = node['maxLoop']
+        
+        # 7. Gosub (subroutine calls)
+        if 'gosub' in node:
+            clean_node['gosub'] = node['gosub']
+        
+        # 8. Goto (direct transitions)
+        if 'goto' in node:
+            clean_node['goto'] = node['goto']
+        
+        # 9. Nobarge (non-interruptible)
+        if 'nobarge' in node:
+            clean_node['nobarge'] = node['nobarge']
+        
+        # 10. Guard (conditional execution) - allflows LITE pattern
+        if 'guard' in node:
+            clean_node['guard'] = node['guard']
+        
+        # Add any other properties that might be present
+        for key, value in node.items():
+            if key not in clean_node:
+                clean_node[key] = value
+        
+        formatted_nodes.append(clean_node)
+    
+    # Convert to JavaScript format with proper formatting
+    try:
+        # Use enhanced JavaScript formatting for allflows LITE compatibility
+        js_output = _format_as_javascript_enhanced(formatted_nodes)
+        return f"module.exports = {js_output};"
+        
+    except Exception as e:
+        # Fallback to basic JSON formatting
+        json_str = json.dumps(formatted_nodes, indent=2)
+        return f"module.exports = {json_str};"
+
+def _format_as_javascript_enhanced(nodes: List[Dict[str, Any]]) -> str:
+    """Enhanced format nodes as JavaScript array with allflows LITE compatibility"""
+    lines = ["["]
+    
+    for i, node in enumerate(nodes):
+        lines.append("    {")
+        
+        # Format each property with enhanced handling
+        for j, (key, value) in enumerate(node.items()):
+            formatted_value = _format_js_value_enhanced(value)
+            comma = "," if j < len(node) - 1 else ""
+            lines.append(f'        {key}: {formatted_value}{comma}')
+        
+        closer = "    }," if i < len(nodes) - 1 else "    }"
+        lines.append(closer)
+    
+    lines.append("]")
+    
+    return "\n".join(lines)
+
+def _format_js_value_enhanced(value: Any) -> str:
+    """Enhanced format a value for JavaScript output with guard function support"""
+    if isinstance(value, str):
+        # Special handling for guard functions (allflows LITE pattern)
+        if value.startswith("function"):
+            return value  # Don't quote function definitions
+        else:
+            return f'"{value}"'
+    elif isinstance(value, list):
+        if not value:
+            return "[]"
+        
+        # Check if all items are strings
+        if all(isinstance(item, str) for item in value):
+            formatted_items = [f'"{item}"' for item in value]
+            if len(formatted_items) == 1:
+                return f'[{formatted_items[0]}]'
+            else:
+                return "[\n            " + ",\n            ".join(formatted_items) + "\n        ]"
+        else:
+            # Mixed types - use JSON formatting but handle special cases
+            formatted_items = []
+            for item in value:
+                if isinstance(item, str):
+                    formatted_items.append(f'"{item}"')
+                else:
+                    formatted_items.append(str(item))
+            
+            if len(formatted_items) == 1:
+                return f'[{formatted_items[0]}]'
+            else:
+                return "[" + ", ".join(formatted_items) + "]"
+    
+    elif isinstance(value, dict):
+        if not value:
+            return "{}"
+        
+        lines = ["{"]
+        items = list(value.items())
+        for j, (k, v) in enumerate(items):
+            formatted_v = _format_js_value_enhanced(v)
+            comma = "," if j < len(items) - 1 else ""
+            lines.append(f'            {k}: {formatted_v}{comma}')
+        lines.append("        }")
+        
+        return "\n        ".join(lines)
+    
+    elif isinstance(value, bool):
+        return "true" if value else "false"
+    elif value is None:
+        return "null"
+    else:
+        return str(value)
+
+# Enhanced validation function for the generated IVR code
+def validate_ivr_nodes(ivr_nodes: List[Dict[str, Any]]) -> List[str]:
+    """Enhanced validate IVR nodes and return list of issues found"""
+    issues = []
+    labels = set()
+    
+    for i, node in enumerate(ivr_nodes):
+        # Check required fields
+        if 'label' not in node:
+            issues.append(f"Node {i}: Missing required 'label' field")
+        else:
+            label = node['label']
+            if label in labels:
+                issues.append(f"Node {i}: Duplicate label '{label}'")
+            labels.add(label)
+        
+        # Check branch targets
+        if 'branch' in node:
+            for digit, target in node['branch'].items():
+                if target not in labels and target not in ['Problems', 'Goodbye', 'hangup']:
+                    issues.append(f"Node {i}: Branch target '{target}' not found")
+        
+        # Check goto targets
+        if 'goto' in node:
+            target = node['goto']
+            if target not in labels and target not in ['Problems', 'Goodbye', 'hangup']:
+                issues.append(f"Node {i}: Goto target '{target}' not found")
+        
+        # Check getDigits structure
+        if 'getDigits' in node:
+            get_digits = node['getDigits']
+            if not isinstance(get_digits, dict):
+                issues.append(f"Node {i}: getDigits must be an object")
+            else:
+                required_fields = ['numDigits', 'validChoices']
+                for field in required_fields:
+                    if field not in get_digits:
+                        issues.append(f"Node {i}: getDigits missing '{field}' field")
+        
+        # Check gosub structure (allflows LITE pattern)
+        if 'gosub' in node:
+            gosub = node['gosub']
+            if not isinstance(gosub, list) or len(gosub) != 3:
+                issues.append(f"Node {i}: gosub must be array of 3 elements [function, code, description]")
+        
+        # Check guard function syntax
+        if 'guard' in node:
+            guard = node['guard']
+            if not isinstance(guard, str) or not guard.startswith('function'):
+                issues.append(f"Node {i}: guard must be a function string")
+    
+    return issues
+, before_bracket)
+                    if id_match:
+                        node_id = id_match.group(1)
+                        # Extract text between quotes
+                        node_text = line[quote_start + 1:quote_end]
+                        # Clean HTML tags and normalize
+                        node_text = re.sub(r'<br\s*/?>', ' ', node_text)
+                        node_text = re.sub(r'<[^>]+>', '', node_text)
+                        node_texts[node_id] = node_text.strip()
+        
+        # Second pass: Parse connections and extract inline node definitions
+        for line in lines:
+            if line.startswith('flowchart') or line.startswith('%%'):
+                continue
+                
+            # Parse connections and extract nodes
+            if '-->' in line:
+                try:
+                    # Split the line at --> to separate source and target
+                    arrow_pos = line.find('-->')
+                    source_part = line[:arrow_pos].strip()
+                    target_part = line[arrow_pos + 3:].strip()
+                    
+                    # Enhanced source node extraction
+                    # Handle patterns like: A["complex text with (variables) and <br/> tags"]
+                    source_id = None
+                    if '"' in source_part:
+                        # Extract from quoted definition
+                        quote_start = source_part.find('"')
+                        quote_end = source_part.rfind('"')
+                        if quote_start != -1 and quote_end != -1 and quote_end > quote_start:
+                            # Get node ID (everything before the bracket/quote)
+                            before_bracket = source_part[:quote_start]
+                            id_match = re.search(r'([A-Z]+)\s*[\[{]?\s*
+        
+        # Fallback: If we still don't have text for a node, try to extract it more aggressively
+        for line in lines:
+            if '-->' not in line and not line.startswith('flowchart'):
+                # Try to match any node definition pattern
+                fallback_match = re.search(r'([A-Z]+)\s*[\[{]"([^"]+)"[\]}]', line)
+                if fallback_match:
+                    node_id = fallback_match.group(1)
+                    if node_id not in node_texts:
+                        node_text = fallback_match.group(2)
+                        node_text = re.sub(r'<br\s*/?>', ' ', node_text)
+                        node_text = re.sub(r'<[^>]+>', '', node_text)
+                        node_texts[node_id] = node_text.strip()
+        
+        # Create node objects with proper classification
+        for node_id, node_text in node_texts.items():
+            # Generate descriptive label
+            label = self._generate_descriptive_label(node_text, connections, node_id)
+            
+            # Classify node type
+            node_type = self._classify_node_type(node_text, connections, node_id)
+            
+            nodes.append({
+                'id': node_id,
+                'text': node_text,
+                'label': label,
+                'type': node_type
+            })
+        
+        return nodes, connections
+
+    def _classify_node_type(self, text: str, connections: List[Dict[str, str]], node_id: str) -> NodeType:
+        """Classify node type for proper IVR generation"""
+        text_lower = text.lower()
+        
+        # Analyze outgoing connections to help classification
+        outgoing_connections = [conn for conn in connections if conn['source'] == node_id]
+        has_multiple_choices = len(outgoing_connections) > 1
+        
+        if 'welcome' in text_lower or ('this is an' in text_lower and 'press' in text_lower):
+            return NodeType.WELCOME
+        elif 'pin' in text_lower and 'enter' in text_lower:
+            return NodeType.PIN_ENTRY
+        elif 'available' in text_lower and 'callout' in text_lower:
+            return NodeType.AVAILABILITY
+        elif 'accept' in text_lower or 'decline' in text_lower or 'not home' in text_lower:
+            return NodeType.RESPONSE
+        elif 'goodbye' in text_lower or 'thank you' in text_lower:
+            return NodeType.GOODBYE
+        elif 'problems' in text_lower or 'error' in text_lower:
+            return NodeType.ERROR
+        elif 'press any key' in text_lower or '30-second' in text_lower:
+            return NodeType.SLEEP
+        elif has_multiple_choices or ('?' in text_lower and len(outgoing_connections) > 0):
+            return NodeType.DECISION
+        else:
+            return NodeType.ACTION
+
+    def _generate_descriptive_label(self, text: str, connections: List[Dict[str, str]], node_id: str) -> str:
+        """Generate descriptive label following Andres's conventions"""
+        text_lower = text.lower()
+        
+        # Welcome/opening nodes
+        if 'welcome' in text_lower or ('this is an' in text_lower and 'callout' in text_lower):
+            return "Live Answer"
+        
+        # PIN related
+        elif 'pin' in text_lower and 'enter' in text_lower:
+            return "Enter PIN"
+        elif 'pin' in text_lower and ('correct' in text_lower or 'valid' in text_lower):
+            return "PIN Validation"
+        elif 'invalid' in text_lower and ('pin' in text_lower or 'entry' in text_lower):
+            return "Invalid Entry"
+        
+        # Availability
+        elif 'available' in text_lower and 'callout' in text_lower:
+            return "Available For Callout"
+        
+        # Responses (following allflows patterns)
+        elif 'accept' in text_lower and 'response' in text_lower:
+            return "Accept"
+        elif 'decline' in text_lower:
+            return "Decline"
+        elif 'not home' in text_lower:
+            return "Not Home"
+        elif 'qualified' in text_lower or 'call back' in text_lower:
+            return "Qualified No"
+        
+        # System messages
+        elif 'goodbye' in text_lower:
+            return "Goodbye"
+        elif 'thank you' in text_lower:
+            return "Goodbye"
+        elif 'problems' in text_lower:
+            return "Problems"
+        elif 'press any key' in text_lower or '30-second' in text_lower:
+            return "Sleep"
+        
+        # Callout information
+        elif 'callout reason' in text_lower:
+            return "Callout Reason"
+        elif 'trouble location' in text_lower:
+            return "Trouble Location"
+        elif 'custom message' in text_lower:
+            return "Custom Message"
+        elif 'electric callout' in text_lower:
+            return "Electric Callout"
+        
+        # Fallback to meaningful name
+        else:
+            # Extract key words for label
+            words = re.findall(r'\b[A-Z][a-z]+', text)
+            if words:
+                return ' '.join(words[:2])
+            else:
+                return node_id.title()
+
+    def _generate_database_driven_flow(self, nodes: List[Dict[str, Any]], connections: List[Dict[str, str]], notes: List[str]) -> List[Dict[str, Any]]:
+        """Generate complete IVR flow using database-driven approach with allflows LITE patterns"""
+        if not nodes:
+            notes.append("No nodes to process")
+            return []
+            
+        ivr_nodes = []
+        used_labels = set()
+        
+        # Create a mapping of node IDs to their generated labels for cross-referencing
+        node_id_to_label = {}
+        
+        # First pass: Generate labels for all nodes
+        for node in nodes:
+            label = node['label']
+            counter = 2
+            while label in used_labels:
+                label = f"{node['label']} {counter}"
+                counter += 1
+            used_labels.add(label)
+            node_id_to_label[node['id']] = label
+        
+        # Second pass: Generate IVR nodes with proper cross-references
+        for node in nodes:
+            label = node_id_to_label[node['id']]
+            
+            # Generate IVR node(s) based on type and complexity
+            node_connections = [conn for conn in connections if conn['source'] == node['id']]
+            
+            # Check if we should create multi-object nodes (glommer nodes)
+            if self._should_split_into_glommer_nodes(node['text']) and node.get('type') == NodeType.WELCOME:
+                generated_nodes = self._create_multi_object_welcome_node(node, label, node_connections, node_id_to_label, notes)
+            else:
+                generated_nodes = self._create_database_node_with_mapping(node, label, node_connections, node_id_to_label, notes)
+            
+            for ivr_node in generated_nodes:
+                # Add nobarge where appropriate
+                if node.get('type') in [NodeType.RESPONSE, NodeType.GOODBYE, NodeType.ERROR]:
+                    ivr_node["nobarge"] = "1"
+                ivr_nodes.append(ivr_node)
+        
+        # Add standard handlers if not present
+        self._ensure_standard_handlers(ivr_nodes, used_labels, notes)
+        
+        return ivr_nodes
+
+    def _create_multi_object_welcome_node(self, node: Dict[str, Any], label: str, connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]) -> List[Dict[str, Any]]:
+        """Create multi-object welcome node following allflows LITE patterns"""
+        text = node['text']
+        segments, variables = self._intelligent_segmentation(text)
+        play_log, play_prompt = self._generate_database_prompts(segments, variables, notes)
+        
+        nodes = []
+        
+        # Object 1: Main callout information (first part)
+        main_segments = 5  # Split at reasonable boundary
+        main_node = {
+            "label": label
+        }
+        
+        if len(play_log) > main_segments:
+            main_node["playLog"] = play_log[:main_segments]
+            main_node["playPrompt"] = play_prompt[:main_segments]
+        else:
+            main_node["playLog"] = play_log
+            main_node["playPrompt"] = play_prompt
+        
+        nodes.append(main_node)
+        
+        # Object 2: Environment check (if not production) - allflows LITE pattern
+        env_node = {
+            "log": "environment",
+            "guard": "function (){ return this.data.env!='prod' && this.data.env!='PROD' }",
+            "playPrompt": "callflow:{{env}}",
+            "nobarge": "1"
+        }
+        nodes.append(env_node)
+        
+        # Object 3: Menu options with getDigits (remaining segments)
+        menu_node = {}
+        
+        if len(play_log) > main_segments:
+            menu_node["playLog"] = play_log[main_segments:]
+            menu_node["playPrompt"] = play_prompt[main_segments:]
+        else:
+            menu_node["playLog"] = ["Menu options"]
+            menu_node["playPrompt"] = ["callflow:MenuOptions"]
+        
+        # Add getDigits and branch logic
+        self._add_welcome_logic_with_mapping(menu_node, connections, node_id_to_label, notes)
+        nodes.append(menu_node)
+        
+        notes.append(f"Created multi-object welcome node with {len(nodes)} components")
+        
+        return nodes
+
+    def _create_database_node_with_mapping(self, node: Dict[str, Any], label: str, connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]) -> List[Dict[str, Any]]:
+        """Create IVR node(s) using database matching with proper label mapping"""
+        text = node['text']
+        node_type = node.get('type', NodeType.ACTION)
+        
+        # Intelligent segmentation using database
+        segments, variables = self._intelligent_segmentation(text)
+        play_log, play_prompt = self._generate_database_prompts(segments, variables, notes)
+        
+        # Create base node following allflows property order
+        ivr_node = {}
+        
+        # Property order: label → playLog → playPrompt → getDigits → branch → maxLoop → gosub → goto → nobarge
+        ivr_node["label"] = label
+        
+        if len(play_log) > 1:
+            ivr_node["playLog"] = play_log
+        elif play_log:
+            ivr_node["log"] = play_log[0]  # Single log entry uses "log" instead of "playLog"
+        
+        if len(play_prompt) > 1:
+            ivr_node["playPrompt"] = play_prompt
+        elif play_prompt:
+            ivr_node["playPrompt"] = play_prompt[0]
+        
+        # Add interaction logic based on node type and connections
+        if node_type == NodeType.WELCOME and connections:
+            self._add_welcome_logic_with_mapping(ivr_node, connections, node_id_to_label, notes)
+        elif node_type == NodeType.PIN_ENTRY:
+            self._add_pin_logic_with_mapping(ivr_node, connections, node_id_to_label, notes)
+        elif node_type == NodeType.AVAILABILITY and connections:
+            self._add_availability_logic_with_mapping(ivr_node, connections, node_id_to_label, notes)
+        elif node_type == NodeType.RESPONSE:
+            self._add_response_logic(ivr_node, label, notes)
+        elif node_type == NodeType.SLEEP:
+            self._add_sleep_logic_with_mapping(ivr_node, connections, node_id_to_label, notes)
+        elif connections and len(connections) > 1:
+            self._add_decision_logic_with_mapping(ivr_node, connections, node_id_to_label, notes)
+        elif connections and len(connections) == 1:
+            target_id = connections[0]['target']
+            target_label = node_id_to_label.get(target_id, target_id)
+            ivr_node["goto"] = target_label
+        
+        return [ivr_node]
+
+    def _add_welcome_logic_with_mapping(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]):
+        """Add welcome node logic following allflows patterns with proper label mapping"""
+        ivr_node["getDigits"] = {
+            "numDigits": 1,
+            "maxTime": 1,  # Very short timeout for main menu (allflows LITE pattern)
+            "validChoices": "",
+            "errorPrompt": "callflow:1009"
+        }
+        
+        branch = {}
+        valid_choices = []
+        
+        for conn in connections:
+            label = conn['label'].lower()
+            digit_match = re.search(r'(\d+)', label)
+            
+            if digit_match:
+                digit = digit_match.group(1)
+                target_id = conn['target']
+                target_label = node_id_to_label.get(target_id, target_id)
+                branch[digit] = target_label
+                valid_choices.append(digit)
+            elif 'retry' in label or 'repeat' in label or 'invalid' in label:
+                # Self-reference for retries
+                branch["error"] = ivr_node["label"]
+        
+        # Add default handling
+        if branch:
+            ivr_node["branch"] = branch
+            ivr_node["getDigits"]["validChoices"] = "|".join(sorted(valid_choices))
+            # Add error handling
+            if "error" not in branch:
+                branch["error"] = ivr_node["label"]  # Self-reference for retries
+        
+        # Add retry logic (allflows LITE pattern)
+        ivr_node["maxLoop"] = ["Loop-Main", 3, "Problems"]
+
+    def _add_pin_logic_with_mapping(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]):
+        """Add PIN entry logic following allflows patterns with proper label mapping"""
+        ivr_node["getDigits"] = {
+            "numDigits": 5,  # 4 digits + pound (allflows LITE pattern)
+            "maxTries": 3,
+            "maxTime": 7,
+            "validChoices": "{{pin}}",  # Dynamic PIN validation
+            "errorPrompt": "callflow:1009",
+            "nonePrompt": "callflow:1009"
+        }
+        
+        # Add branch logic for validation
+        if connections:
+            branch = {}
+            for conn in connections:
+                if 'yes' in conn['label'].lower() or 'correct' in conn['label'].lower() or 'valid' in conn['label'].lower():
+                    target_id = conn['target']
+                    target_label = node_id_to_label.get(target_id, target_id)
+                    branch["match"] = target_label
+                elif 'no' in conn['label'].lower() or 'invalid' in conn['label'].lower() or 'retry' in conn['label'].lower():
+                    target_id = conn['target']
+                    target_label = node_id_to_label.get(target_id, target_id)
+                    branch["nomatch"] = target_label
+            
+            if branch:
+                ivr_node["branch"] = branch
+            
+        # Add retry handling
+        ivr_node["maxLoop"] = ["Loop-PIN", 3, "Problems"]
+
+    def _add_availability_logic_with_mapping(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]):
+        """Add availability check logic following allflows patterns with proper label mapping"""
+        ivr_node["getDigits"] = {
+            "numDigits": 1,
+            "maxTries": 3,
+            "maxTime": 7,
+            "validChoices": "1|3|0",  # Standard availability choices
+            "errorPrompt": "callflow:1009",
+            "nonePrompt": "callflow:1009"
+        }
+        
+        branch = {}
+        for conn in connections:
+            label = conn['label'].lower()
+            target_id = conn['target']
+            target_label = node_id_to_label.get(target_id, target_id)
+            
+            if '1' in label or 'accept' in label:
+                branch["1"] = target_label
+            elif '3' in label or 'decline' in label:
+                branch["3"] = target_label
+            elif '0' in label or 'call back' in label or '9' in label:
+                branch["0"] = target_label
+            elif 'invalid' in label or 'retry' in label:
+                branch["error"] = target_label
+        
+        # Add default error handling if not specified
+        if "error" not in branch:
+            branch["error"] = "Invalid Entry"
+        if "timeout" not in branch:
+            branch["timeout"] = "Invalid Entry"
+        
+        if branch:
+            ivr_node["branch"] = branch
+        
+        ivr_node["maxLoop"] = ["Loop-Availability", 3, "Problems"]
+
+    def _add_sleep_logic_with_mapping(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]):
+        """Add sleep/wait logic following allflows patterns with proper label mapping"""
+        ivr_node["getDigits"] = {
+            "numDigits": 1,
+            "maxTime": 30,  # 30-second timeout (allflows LITE pattern)
+            "validChoices": "1|2|3|4|5|6|7|8|9|0|*|#",
+            "errorPrompt": "callflow:1009",
+            "nonePrompt": "callflow:1009"
+        }
+        
+        # Default behavior for any key press or timeout
+        if connections:
+            target_id = connections[0]['target']
+            target_label = node_id_to_label.get(target_id, target_id)
+            ivr_node["branch"] = {
+                "next": target_label,
+                "none": target_label  # Same destination for timeout
+            }
+        else:
+            ivr_node["branch"] = {
+                "next": "Live Answer",
+                "none": "Live Answer"
+            }
+
+    def _add_decision_logic_with_mapping(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]):
+        """Add decision logic for multiple choice nodes with proper label mapping"""
+        ivr_node["getDigits"] = {
+            "numDigits": 1,
+            "maxTries": 3,
+            "maxTime": 7,
+            "validChoices": "",
+            "errorPrompt": "callflow:1009",
+            "nonePrompt": "callflow:1009"
+        }
+        
+        branch = {}
+        valid_choices = []
+        
+        for conn in connections:
+            digit_match = re.search(r'(\d+)', conn['label'])
+            if digit_match:
+                digit = digit_match.group(1)
+                target_id = conn['target']
+                target_label = node_id_to_label.get(target_id, target_id)
+                branch[digit] = target_label
+                valid_choices.append(digit)
+            elif 'yes' in conn['label'].lower():
+                target_id = conn['target']
+                target_label = node_id_to_label.get(target_id, target_id)
+                branch["yes"] = target_label
+            elif 'no' in conn['label'].lower():
+                target_id = conn['target']
+                target_label = node_id_to_label.get(target_id, target_id)
+                branch["no"] = target_label
+        
+        # Add error handling
+        if "error" not in branch:
+            branch["error"] = "Invalid Entry"
+        
+        if branch:
+            ivr_node["branch"] = branch
+            if valid_choices:
+                ivr_node["getDigits"]["validChoices"] = "|".join(valid_choices)
+        
+        ivr_node["maxLoop"] = ["Loop-Decision", 3, "Problems"]
+
+    def _add_response_logic(self, ivr_node: Dict[str, Any], label: str, notes: List[str]):
+        """Add response handler logic following allflows patterns"""
+        label_lower = label.lower()
+        
+        # Add gosub for response recording (allflows LITE pattern)
+        if 'accept' in label_lower:
+            ivr_node["gosub"] = self.response_codes['accept']
+        elif 'decline' in label_lower:
+            ivr_node["gosub"] = self.response_codes['decline']
+        elif 'not home' in label_lower:
+            ivr_node["gosub"] = self.response_codes['not_home']
+        elif 'qualified' in label_lower:
+            ivr_node["gosub"] = self.response_codes['qualified_no']
+        else:
+            ivr_node["gosub"] = self.response_codes['error']
+        
+        # Add nobarge for non-interruptible response messages
+        ivr_node["nobarge"] = "1"
+        
+        # Always go to Goodbye after response
+        ivr_node["goto"] = "Goodbye"
+
+    def _ensure_standard_handlers(self, ivr_nodes: List[Dict[str, Any]], used_labels: Set[str], notes: List[str]):
+        """Ensure standard handler nodes exist following allflows LITE patterns"""
+        existing_labels = {node.get('label') for node in ivr_nodes}
+        
+        # Add Problems handler if missing
+        if 'Problems' not in existing_labels:
+            problems_node = {
+                "label": "Problems",
+                "gosub": self.response_codes['error']
+            }
+            # Add the actual problem message components
+            ivr_nodes.append(problems_node)
+            
+            # Add the message part
+            problems_message = {
+                "nobarge": "1",
+                "playLog": ["I'm sorry you are having problems.", "Please have", "Employee name"],
+                "playPrompt": ["callflow:1351", "callflow:1017", "names:{{contact_id}}"]
+            }
+            ivr_nodes.append(problems_message)
+            
+            # Add call instructions
+            problems_call = {
+                "log": "call the",
+                "playPrompt": "callflow:1174"
+            }
+            ivr_nodes.append(problems_call)
+            
+            # Add final part
+            problems_final = {
+                "nobarge": "1",
+                "playLog": ["APS", "callout system", "at", "speak phone num"],
+                "playPrompt": ["location:{{level2_location}}", "callflow:1290", "callflow:1015", "digits:{{callback_number}}"],
+                "goto": "Goodbye"
+            }
+            ivr_nodes.append(problems_final)
+            
+            notes.append("Added complete Problems handler with multi-object structure")
+        
+        # Add Goodbye handler if missing
+        if 'Goodbye' not in existing_labels:
+            goodbye_node = {
+                "label": "Goodbye",
+                "log": "Goodbye(1029)",
+                "playPrompt": "callflow:1029",
+                "nobarge": "1",
+                "goto": "hangup"
+            }
+            ivr_nodes.append(goodbye_node)
+            notes.append("Added Goodbye handler")
+
+    def _create_fallback_flow(self) -> List[Dict[str, Any]]:
+        """Create fallback flow when parsing fails"""
+        return [
+            {
+                "label": "Live Answer",
+                "log": "Welcome message",
+                "playPrompt": "callflow:Welcome",
+                "goto": "Problems"
+            },
+            {
+                "label": "Problems",
+                "log": "Error handler",
+                "playPrompt": "callflow:1351",
+                "goto": "Goodbye"
+            },
+            {
+                "label": "Goodbye",
+                "log": "Goodbye message",
+                "playPrompt": "callflow:1029",
+                "goto": "hangup"
+            }
+        ]
+
+
+def convert_mermaid_to_ivr(mermaid_code: str) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Main conversion function using sophisticated database-driven approach"""
+    converter = DatabaseDrivenIVRConverter()
+    return converter.convert(mermaid_code)
+
+
+# Enhanced Format IVR Output Functions for allflows LITE compatibility
+def format_ivr_output(ivr_nodes: List[Dict[str, Any]]) -> str:
+    """
+    Format IVR nodes into production-ready JavaScript module.exports format
+    Enhanced for full allflows LITE compatibility
+    """
+    if not ivr_nodes:
+        return "module.exports = [];"
+    
+    # Clean and format the nodes following allflows property order
+    formatted_nodes = []
+    
+    for node in ivr_nodes:
+        # Ensure all nodes have required fields
+        clean_node = {}
+        
+        # Property order from allflows: label → log/playLog → playPrompt → getDigits → branch → maxLoop → gosub → goto → nobarge → guard
+        
+        # 1. Label (required)
+        if 'label' in node:
+            clean_node['label'] = node['label']
+        
+        # 2. Log/PlayLog (documentation)
+        if 'playLog' in node:
+            clean_node['playLog'] = node['playLog']
+        elif 'log' in node:
+            clean_node['log'] = node['log']
+        
+        # 3. PlayPrompt (voice files)
+        if 'playPrompt' in node:
+            clean_node['playPrompt'] = node['playPrompt']
+        
+        # 4. GetDigits (input collection)
+        if 'getDigits' in node:
+            clean_node['getDigits'] = node['getDigits']
+        
+        # 5. Branch (conditional navigation)
+        if 'branch' in node:
+            clean_node['branch'] = node['branch']
+        
+        # 6. MaxLoop (retry logic)
+        if 'maxLoop' in node:
+            clean_node['maxLoop'] = node['maxLoop']
+        
+        # 7. Gosub (subroutine calls)
+        if 'gosub' in node:
+            clean_node['gosub'] = node['gosub']
+        
+        # 8. Goto (direct transitions)
+        if 'goto' in node:
+            clean_node['goto'] = node['goto']
+        
+        # 9. Nobarge (non-interruptible)
+        if 'nobarge' in node:
+            clean_node['nobarge'] = node['nobarge']
+        
+        # 10. Guard (conditional execution) - allflows LITE pattern
+        if 'guard' in node:
+            clean_node['guard'] = node['guard']
+        
+        # Add any other properties that might be present
+        for key, value in node.items():
+            if key not in clean_node:
+                clean_node[key] = value
+        
+        formatted_nodes.append(clean_node)
+    
+    # Convert to JavaScript format with proper formatting
+    try:
+        # Use enhanced JavaScript formatting for allflows LITE compatibility
+        js_output = _format_as_javascript_enhanced(formatted_nodes)
+        return f"module.exports = {js_output};"
+        
+    except Exception as e:
+        # Fallback to basic JSON formatting
+        json_str = json.dumps(formatted_nodes, indent=2)
+        return f"module.exports = {json_str};"
+
+def _format_as_javascript_enhanced(nodes: List[Dict[str, Any]]) -> str:
+    """Enhanced format nodes as JavaScript array with allflows LITE compatibility"""
+    lines = ["["]
+    
+    for i, node in enumerate(nodes):
+        lines.append("    {")
+        
+        # Format each property with enhanced handling
+        for j, (key, value) in enumerate(node.items()):
+            formatted_value = _format_js_value_enhanced(value)
+            comma = "," if j < len(node) - 1 else ""
+            lines.append(f'        {key}: {formatted_value}{comma}')
+        
+        closer = "    }," if i < len(nodes) - 1 else "    }"
+        lines.append(closer)
+    
+    lines.append("]")
+    
+    return "\n".join(lines)
+
+def _format_js_value_enhanced(value: Any) -> str:
+    """Enhanced format a value for JavaScript output with guard function support"""
+    if isinstance(value, str):
+        # Special handling for guard functions (allflows LITE pattern)
+        if value.startswith("function"):
+            return value  # Don't quote function definitions
+        else:
+            return f'"{value}"'
+    elif isinstance(value, list):
+        if not value:
+            return "[]"
+        
+        # Check if all items are strings
+        if all(isinstance(item, str) for item in value):
+            formatted_items = [f'"{item}"' for item in value]
+            if len(formatted_items) == 1:
+                return f'[{formatted_items[0]}]'
+            else:
+                return "[\n            " + ",\n            ".join(formatted_items) + "\n        ]"
+        else:
+            # Mixed types - use JSON formatting but handle special cases
+            formatted_items = []
+            for item in value:
+                if isinstance(item, str):
+                    formatted_items.append(f'"{item}"')
+                else:
+                    formatted_items.append(str(item))
+            
+            if len(formatted_items) == 1:
+                return f'[{formatted_items[0]}]'
+            else:
+                return "[" + ", ".join(formatted_items) + "]"
+    
+    elif isinstance(value, dict):
+        if not value:
+            return "{}"
+        
+        lines = ["{"]
+        items = list(value.items())
+        for j, (k, v) in enumerate(items):
+            formatted_v = _format_js_value_enhanced(v)
+            comma = "," if j < len(items) - 1 else ""
+            lines.append(f'            {k}: {formatted_v}{comma}')
+        lines.append("        }")
+        
+        return "\n        ".join(lines)
+    
+    elif isinstance(value, bool):
+        return "true" if value else "false"
+    elif value is None:
+        return "null"
+    else:
+        return str(value)
+
+# Enhanced validation function for the generated IVR code
+def validate_ivr_nodes(ivr_nodes: List[Dict[str, Any]]) -> List[str]:
+    """Enhanced validate IVR nodes and return list of issues found"""
+    issues = []
+    labels = set()
+    
+    for i, node in enumerate(ivr_nodes):
+        # Check required fields
+        if 'label' not in node:
+            issues.append(f"Node {i}: Missing required 'label' field")
+        else:
+            label = node['label']
+            if label in labels:
+                issues.append(f"Node {i}: Duplicate label '{label}'")
+            labels.add(label)
+        
+        # Check branch targets
+        if 'branch' in node:
+            for digit, target in node['branch'].items():
+                if target not in labels and target not in ['Problems', 'Goodbye', 'hangup']:
+                    issues.append(f"Node {i}: Branch target '{target}' not found")
+        
+        # Check goto targets
+        if 'goto' in node:
+            target = node['goto']
+            if target not in labels and target not in ['Problems', 'Goodbye', 'hangup']:
+                issues.append(f"Node {i}: Goto target '{target}' not found")
+        
+        # Check getDigits structure
+        if 'getDigits' in node:
+            get_digits = node['getDigits']
+            if not isinstance(get_digits, dict):
+                issues.append(f"Node {i}: getDigits must be an object")
+            else:
+                required_fields = ['numDigits', 'validChoices']
+                for field in required_fields:
+                    if field not in get_digits:
+                        issues.append(f"Node {i}: getDigits missing '{field}' field")
+        
+        # Check gosub structure (allflows LITE pattern)
+        if 'gosub' in node:
+            gosub = node['gosub']
+            if not isinstance(gosub, list) or len(gosub) != 3:
+                issues.append(f"Node {i}: gosub must be array of 3 elements [function, code, description]")
+        
+        # Check guard function syntax
+        if 'guard' in node:
+            guard = node['guard']
+            if not isinstance(guard, str) or not guard.startswith('function'):
+                issues.append(f"Node {i}: guard must be a function string")
+    
+    return issues
+, before_bracket)
+                            if id_match:
+                                source_id = id_match.group(1)
+                                # Extract text between quotes
+                                source_text = source_part[quote_start + 1:quote_end]
+                                # Clean HTML tags from text
+                                source_text = re.sub(r'<br\s*/?>', ' ', source_text)
+                                source_text = re.sub(r'<[^>]+>', '', source_text)
+                                node_texts[source_id] = source_text.strip()
+                    
+                    if not source_id:
+                        # Fallback to simple ID extraction
+                        simple_match = re.match(r'^([A-Z]+)', source_part)
+                        if simple_match:
+                            source_id = simple_match.group(1)
+                    
+                    # Extract connection label from target part
+                    connection_label = ""
+                    if '|' in target_part:
+                        # Extract label between pipes
+                        label_match = re.search(r'\|"([^"]+)"\|', target_part)
+                        if not label_match:
+                            label_match = re.search(r'\|([^|]+)\|', target_part)
+                        if label_match:
+                            connection_label = label_match.group(1).strip('"')
+                        # Remove label from target part
+                        target_part = re.sub(r'\|[^|]*\|', '', target_part).strip()
+                    
+                    # Enhanced target node extraction
+                    target_id = None
+                    if '"' in target_part:
+                        # Extract from quoted definition  
+                        quote_start = target_part.find('"')
+                        quote_end = target_part.rfind('"')
+                        if quote_start != -1 and quote_end != -1 and quote_end > quote_start:
+                            # Get node ID (everything before the bracket/quote)
+                            before_bracket = target_part[:quote_start]
+                            id_match = re.search(r'([A-Z]+)\s*[\[{]?\s*
+        
+        # Fallback: If we still don't have text for a node, try to extract it more aggressively
+        for line in lines:
+            if '-->' not in line and not line.startswith('flowchart'):
+                # Try to match any node definition pattern
+                fallback_match = re.search(r'([A-Z]+)\s*[\[{]"([^"]+)"[\]}]', line)
+                if fallback_match:
+                    node_id = fallback_match.group(1)
+                    if node_id not in node_texts:
+                        node_text = fallback_match.group(2)
+                        node_text = re.sub(r'<br\s*/?>', ' ', node_text)
+                        node_text = re.sub(r'<[^>]+>', '', node_text)
+                        node_texts[node_id] = node_text.strip()
+        
+        # Create node objects with proper classification
+        for node_id, node_text in node_texts.items():
+            # Generate descriptive label
+            label = self._generate_descriptive_label(node_text, connections, node_id)
+            
+            # Classify node type
+            node_type = self._classify_node_type(node_text, connections, node_id)
+            
+            nodes.append({
+                'id': node_id,
+                'text': node_text,
+                'label': label,
+                'type': node_type
+            })
+        
+        return nodes, connections
+
+    def _classify_node_type(self, text: str, connections: List[Dict[str, str]], node_id: str) -> NodeType:
+        """Classify node type for proper IVR generation"""
+        text_lower = text.lower()
+        
+        # Analyze outgoing connections to help classification
+        outgoing_connections = [conn for conn in connections if conn['source'] == node_id]
+        has_multiple_choices = len(outgoing_connections) > 1
+        
+        if 'welcome' in text_lower or ('this is an' in text_lower and 'press' in text_lower):
+            return NodeType.WELCOME
+        elif 'pin' in text_lower and 'enter' in text_lower:
+            return NodeType.PIN_ENTRY
+        elif 'available' in text_lower and 'callout' in text_lower:
+            return NodeType.AVAILABILITY
+        elif 'accept' in text_lower or 'decline' in text_lower or 'not home' in text_lower:
+            return NodeType.RESPONSE
+        elif 'goodbye' in text_lower or 'thank you' in text_lower:
+            return NodeType.GOODBYE
+        elif 'problems' in text_lower or 'error' in text_lower:
+            return NodeType.ERROR
+        elif 'press any key' in text_lower or '30-second' in text_lower:
+            return NodeType.SLEEP
+        elif has_multiple_choices or ('?' in text_lower and len(outgoing_connections) > 0):
+            return NodeType.DECISION
+        else:
+            return NodeType.ACTION
+
+    def _generate_descriptive_label(self, text: str, connections: List[Dict[str, str]], node_id: str) -> str:
+        """Generate descriptive label following Andres's conventions"""
+        text_lower = text.lower()
+        
+        # Welcome/opening nodes
+        if 'welcome' in text_lower or ('this is an' in text_lower and 'callout' in text_lower):
+            return "Live Answer"
+        
+        # PIN related
+        elif 'pin' in text_lower and 'enter' in text_lower:
+            return "Enter PIN"
+        elif 'pin' in text_lower and ('correct' in text_lower or 'valid' in text_lower):
+            return "PIN Validation"
+        elif 'invalid' in text_lower and ('pin' in text_lower or 'entry' in text_lower):
+            return "Invalid Entry"
+        
+        # Availability
+        elif 'available' in text_lower and 'callout' in text_lower:
+            return "Available For Callout"
+        
+        # Responses (following allflows patterns)
+        elif 'accept' in text_lower and 'response' in text_lower:
+            return "Accept"
+        elif 'decline' in text_lower:
+            return "Decline"
+        elif 'not home' in text_lower:
+            return "Not Home"
+        elif 'qualified' in text_lower or 'call back' in text_lower:
+            return "Qualified No"
+        
+        # System messages
+        elif 'goodbye' in text_lower:
+            return "Goodbye"
+        elif 'thank you' in text_lower:
+            return "Goodbye"
+        elif 'problems' in text_lower:
+            return "Problems"
+        elif 'press any key' in text_lower or '30-second' in text_lower:
+            return "Sleep"
+        
+        # Callout information
+        elif 'callout reason' in text_lower:
+            return "Callout Reason"
+        elif 'trouble location' in text_lower:
+            return "Trouble Location"
+        elif 'custom message' in text_lower:
+            return "Custom Message"
+        elif 'electric callout' in text_lower:
+            return "Electric Callout"
+        
+        # Fallback to meaningful name
+        else:
+            # Extract key words for label
+            words = re.findall(r'\b[A-Z][a-z]+', text)
+            if words:
+                return ' '.join(words[:2])
+            else:
+                return node_id.title()
+
+    def _generate_database_driven_flow(self, nodes: List[Dict[str, Any]], connections: List[Dict[str, str]], notes: List[str]) -> List[Dict[str, Any]]:
+        """Generate complete IVR flow using database-driven approach with allflows LITE patterns"""
+        if not nodes:
+            notes.append("No nodes to process")
+            return []
+            
+        ivr_nodes = []
+        used_labels = set()
+        
+        # Create a mapping of node IDs to their generated labels for cross-referencing
+        node_id_to_label = {}
+        
+        # First pass: Generate labels for all nodes
+        for node in nodes:
+            label = node['label']
+            counter = 2
+            while label in used_labels:
+                label = f"{node['label']} {counter}"
+                counter += 1
+            used_labels.add(label)
+            node_id_to_label[node['id']] = label
+        
+        # Second pass: Generate IVR nodes with proper cross-references
+        for node in nodes:
+            label = node_id_to_label[node['id']]
+            
+            # Generate IVR node(s) based on type and complexity
+            node_connections = [conn for conn in connections if conn['source'] == node['id']]
+            
+            # Check if we should create multi-object nodes (glommer nodes)
+            if self._should_split_into_glommer_nodes(node['text']) and node.get('type') == NodeType.WELCOME:
+                generated_nodes = self._create_multi_object_welcome_node(node, label, node_connections, node_id_to_label, notes)
+            else:
+                generated_nodes = self._create_database_node_with_mapping(node, label, node_connections, node_id_to_label, notes)
+            
+            for ivr_node in generated_nodes:
+                # Add nobarge where appropriate
+                if node.get('type') in [NodeType.RESPONSE, NodeType.GOODBYE, NodeType.ERROR]:
+                    ivr_node["nobarge"] = "1"
+                ivr_nodes.append(ivr_node)
+        
+        # Add standard handlers if not present
+        self._ensure_standard_handlers(ivr_nodes, used_labels, notes)
+        
+        return ivr_nodes
+
+    def _create_multi_object_welcome_node(self, node: Dict[str, Any], label: str, connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]) -> List[Dict[str, Any]]:
+        """Create multi-object welcome node following allflows LITE patterns"""
+        text = node['text']
+        segments, variables = self._intelligent_segmentation(text)
+        play_log, play_prompt = self._generate_database_prompts(segments, variables, notes)
+        
+        nodes = []
+        
+        # Object 1: Main callout information (first part)
+        main_segments = 5  # Split at reasonable boundary
+        main_node = {
+            "label": label
+        }
+        
+        if len(play_log) > main_segments:
+            main_node["playLog"] = play_log[:main_segments]
+            main_node["playPrompt"] = play_prompt[:main_segments]
+        else:
+            main_node["playLog"] = play_log
+            main_node["playPrompt"] = play_prompt
+        
+        nodes.append(main_node)
+        
+        # Object 2: Environment check (if not production) - allflows LITE pattern
+        env_node = {
+            "log": "environment",
+            "guard": "function (){ return this.data.env!='prod' && this.data.env!='PROD' }",
+            "playPrompt": "callflow:{{env}}",
+            "nobarge": "1"
+        }
+        nodes.append(env_node)
+        
+        # Object 3: Menu options with getDigits (remaining segments)
+        menu_node = {}
+        
+        if len(play_log) > main_segments:
+            menu_node["playLog"] = play_log[main_segments:]
+            menu_node["playPrompt"] = play_prompt[main_segments:]
+        else:
+            menu_node["playLog"] = ["Menu options"]
+            menu_node["playPrompt"] = ["callflow:MenuOptions"]
+        
+        # Add getDigits and branch logic
+        self._add_welcome_logic_with_mapping(menu_node, connections, node_id_to_label, notes)
+        nodes.append(menu_node)
+        
+        notes.append(f"Created multi-object welcome node with {len(nodes)} components")
+        
+        return nodes
+
+    def _create_database_node_with_mapping(self, node: Dict[str, Any], label: str, connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]) -> List[Dict[str, Any]]:
+        """Create IVR node(s) using database matching with proper label mapping"""
+        text = node['text']
+        node_type = node.get('type', NodeType.ACTION)
+        
+        # Intelligent segmentation using database
+        segments, variables = self._intelligent_segmentation(text)
+        play_log, play_prompt = self._generate_database_prompts(segments, variables, notes)
+        
+        # Create base node following allflows property order
+        ivr_node = {}
+        
+        # Property order: label → playLog → playPrompt → getDigits → branch → maxLoop → gosub → goto → nobarge
+        ivr_node["label"] = label
+        
+        if len(play_log) > 1:
+            ivr_node["playLog"] = play_log
+        elif play_log:
+            ivr_node["log"] = play_log[0]  # Single log entry uses "log" instead of "playLog"
+        
+        if len(play_prompt) > 1:
+            ivr_node["playPrompt"] = play_prompt
+        elif play_prompt:
+            ivr_node["playPrompt"] = play_prompt[0]
+        
+        # Add interaction logic based on node type and connections
+        if node_type == NodeType.WELCOME and connections:
+            self._add_welcome_logic_with_mapping(ivr_node, connections, node_id_to_label, notes)
+        elif node_type == NodeType.PIN_ENTRY:
+            self._add_pin_logic_with_mapping(ivr_node, connections, node_id_to_label, notes)
+        elif node_type == NodeType.AVAILABILITY and connections:
+            self._add_availability_logic_with_mapping(ivr_node, connections, node_id_to_label, notes)
+        elif node_type == NodeType.RESPONSE:
+            self._add_response_logic(ivr_node, label, notes)
+        elif node_type == NodeType.SLEEP:
+            self._add_sleep_logic_with_mapping(ivr_node, connections, node_id_to_label, notes)
+        elif connections and len(connections) > 1:
+            self._add_decision_logic_with_mapping(ivr_node, connections, node_id_to_label, notes)
+        elif connections and len(connections) == 1:
+            target_id = connections[0]['target']
+            target_label = node_id_to_label.get(target_id, target_id)
+            ivr_node["goto"] = target_label
+        
+        return [ivr_node]
+
+    def _add_welcome_logic_with_mapping(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]):
+        """Add welcome node logic following allflows patterns with proper label mapping"""
+        ivr_node["getDigits"] = {
+            "numDigits": 1,
+            "maxTime": 1,  # Very short timeout for main menu (allflows LITE pattern)
+            "validChoices": "",
+            "errorPrompt": "callflow:1009"
+        }
+        
+        branch = {}
+        valid_choices = []
+        
+        for conn in connections:
+            label = conn['label'].lower()
+            digit_match = re.search(r'(\d+)', label)
+            
+            if digit_match:
+                digit = digit_match.group(1)
+                target_id = conn['target']
+                target_label = node_id_to_label.get(target_id, target_id)
+                branch[digit] = target_label
+                valid_choices.append(digit)
+            elif 'retry' in label or 'repeat' in label or 'invalid' in label:
+                # Self-reference for retries
+                branch["error"] = ivr_node["label"]
+        
+        # Add default handling
+        if branch:
+            ivr_node["branch"] = branch
+            ivr_node["getDigits"]["validChoices"] = "|".join(sorted(valid_choices))
+            # Add error handling
+            if "error" not in branch:
+                branch["error"] = ivr_node["label"]  # Self-reference for retries
+        
+        # Add retry logic (allflows LITE pattern)
+        ivr_node["maxLoop"] = ["Loop-Main", 3, "Problems"]
+
+    def _add_pin_logic_with_mapping(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]):
+        """Add PIN entry logic following allflows patterns with proper label mapping"""
+        ivr_node["getDigits"] = {
+            "numDigits": 5,  # 4 digits + pound (allflows LITE pattern)
+            "maxTries": 3,
+            "maxTime": 7,
+            "validChoices": "{{pin}}",  # Dynamic PIN validation
+            "errorPrompt": "callflow:1009",
+            "nonePrompt": "callflow:1009"
+        }
+        
+        # Add branch logic for validation
+        if connections:
+            branch = {}
+            for conn in connections:
+                if 'yes' in conn['label'].lower() or 'correct' in conn['label'].lower() or 'valid' in conn['label'].lower():
+                    target_id = conn['target']
+                    target_label = node_id_to_label.get(target_id, target_id)
+                    branch["match"] = target_label
+                elif 'no' in conn['label'].lower() or 'invalid' in conn['label'].lower() or 'retry' in conn['label'].lower():
+                    target_id = conn['target']
+                    target_label = node_id_to_label.get(target_id, target_id)
+                    branch["nomatch"] = target_label
+            
+            if branch:
+                ivr_node["branch"] = branch
+            
+        # Add retry handling
+        ivr_node["maxLoop"] = ["Loop-PIN", 3, "Problems"]
+
+    def _add_availability_logic_with_mapping(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]):
+        """Add availability check logic following allflows patterns with proper label mapping"""
+        ivr_node["getDigits"] = {
+            "numDigits": 1,
+            "maxTries": 3,
+            "maxTime": 7,
+            "validChoices": "1|3|0",  # Standard availability choices
+            "errorPrompt": "callflow:1009",
+            "nonePrompt": "callflow:1009"
+        }
+        
+        branch = {}
+        for conn in connections:
+            label = conn['label'].lower()
+            target_id = conn['target']
+            target_label = node_id_to_label.get(target_id, target_id)
+            
+            if '1' in label or 'accept' in label:
+                branch["1"] = target_label
+            elif '3' in label or 'decline' in label:
+                branch["3"] = target_label
+            elif '0' in label or 'call back' in label or '9' in label:
+                branch["0"] = target_label
+            elif 'invalid' in label or 'retry' in label:
+                branch["error"] = target_label
+        
+        # Add default error handling if not specified
+        if "error" not in branch:
+            branch["error"] = "Invalid Entry"
+        if "timeout" not in branch:
+            branch["timeout"] = "Invalid Entry"
+        
+        if branch:
+            ivr_node["branch"] = branch
+        
+        ivr_node["maxLoop"] = ["Loop-Availability", 3, "Problems"]
+
+    def _add_sleep_logic_with_mapping(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]):
+        """Add sleep/wait logic following allflows patterns with proper label mapping"""
+        ivr_node["getDigits"] = {
+            "numDigits": 1,
+            "maxTime": 30,  # 30-second timeout (allflows LITE pattern)
+            "validChoices": "1|2|3|4|5|6|7|8|9|0|*|#",
+            "errorPrompt": "callflow:1009",
+            "nonePrompt": "callflow:1009"
+        }
+        
+        # Default behavior for any key press or timeout
+        if connections:
+            target_id = connections[0]['target']
+            target_label = node_id_to_label.get(target_id, target_id)
+            ivr_node["branch"] = {
+                "next": target_label,
+                "none": target_label  # Same destination for timeout
+            }
+        else:
+            ivr_node["branch"] = {
+                "next": "Live Answer",
+                "none": "Live Answer"
+            }
+
+    def _add_decision_logic_with_mapping(self, ivr_node: Dict[str, Any], connections: List[Dict[str, str]], node_id_to_label: Dict[str, str], notes: List[str]):
+        """Add decision logic for multiple choice nodes with proper label mapping"""
+        ivr_node["getDigits"] = {
+            "numDigits": 1,
+            "maxTries": 3,
+            "maxTime": 7,
+            "validChoices": "",
+            "errorPrompt": "callflow:1009",
+            "nonePrompt": "callflow:1009"
+        }
+        
+        branch = {}
+        valid_choices = []
+        
+        for conn in connections:
+            digit_match = re.search(r'(\d+)', conn['label'])
+            if digit_match:
+                digit = digit_match.group(1)
+                target_id = conn['target']
+                target_label = node_id_to_label.get(target_id, target_id)
+                branch[digit] = target_label
+                valid_choices.append(digit)
+            elif 'yes' in conn['label'].lower():
+                target_id = conn['target']
+                target_label = node_id_to_label.get(target_id, target_id)
+                branch["yes"] = target_label
+            elif 'no' in conn['label'].lower():
+                target_id = conn['target']
+                target_label = node_id_to_label.get(target_id, target_id)
+                branch["no"] = target_label
+        
+        # Add error handling
+        if "error" not in branch:
+            branch["error"] = "Invalid Entry"
+        
+        if branch:
+            ivr_node["branch"] = branch
+            if valid_choices:
+                ivr_node["getDigits"]["validChoices"] = "|".join(valid_choices)
+        
+        ivr_node["maxLoop"] = ["Loop-Decision", 3, "Problems"]
+
+    def _add_response_logic(self, ivr_node: Dict[str, Any], label: str, notes: List[str]):
+        """Add response handler logic following allflows patterns"""
+        label_lower = label.lower()
+        
+        # Add gosub for response recording (allflows LITE pattern)
+        if 'accept' in label_lower:
+            ivr_node["gosub"] = self.response_codes['accept']
+        elif 'decline' in label_lower:
+            ivr_node["gosub"] = self.response_codes['decline']
+        elif 'not home' in label_lower:
+            ivr_node["gosub"] = self.response_codes['not_home']
+        elif 'qualified' in label_lower:
+            ivr_node["gosub"] = self.response_codes['qualified_no']
+        else:
+            ivr_node["gosub"] = self.response_codes['error']
+        
+        # Add nobarge for non-interruptible response messages
+        ivr_node["nobarge"] = "1"
+        
+        # Always go to Goodbye after response
+        ivr_node["goto"] = "Goodbye"
+
+    def _ensure_standard_handlers(self, ivr_nodes: List[Dict[str, Any]], used_labels: Set[str], notes: List[str]):
+        """Ensure standard handler nodes exist following allflows LITE patterns"""
+        existing_labels = {node.get('label') for node in ivr_nodes}
+        
+        # Add Problems handler if missing
+        if 'Problems' not in existing_labels:
+            problems_node = {
+                "label": "Problems",
+                "gosub": self.response_codes['error']
+            }
+            # Add the actual problem message components
+            ivr_nodes.append(problems_node)
+            
+            # Add the message part
+            problems_message = {
+                "nobarge": "1",
+                "playLog": ["I'm sorry you are having problems.", "Please have", "Employee name"],
+                "playPrompt": ["callflow:1351", "callflow:1017", "names:{{contact_id}}"]
+            }
+            ivr_nodes.append(problems_message)
+            
+            # Add call instructions
+            problems_call = {
+                "log": "call the",
+                "playPrompt": "callflow:1174"
+            }
+            ivr_nodes.append(problems_call)
+            
+            # Add final part
+            problems_final = {
+                "nobarge": "1",
+                "playLog": ["APS", "callout system", "at", "speak phone num"],
+                "playPrompt": ["location:{{level2_location}}", "callflow:1290", "callflow:1015", "digits:{{callback_number}}"],
+                "goto": "Goodbye"
+            }
+            ivr_nodes.append(problems_final)
+            
+            notes.append("Added complete Problems handler with multi-object structure")
+        
+        # Add Goodbye handler if missing
+        if 'Goodbye' not in existing_labels:
+            goodbye_node = {
+                "label": "Goodbye",
+                "log": "Goodbye(1029)",
+                "playPrompt": "callflow:1029",
+                "nobarge": "1",
+                "goto": "hangup"
+            }
+            ivr_nodes.append(goodbye_node)
+            notes.append("Added Goodbye handler")
+
+    def _create_fallback_flow(self) -> List[Dict[str, Any]]:
+        """Create fallback flow when parsing fails"""
+        return [
+            {
+                "label": "Live Answer",
+                "log": "Welcome message",
+                "playPrompt": "callflow:Welcome",
+                "goto": "Problems"
+            },
+            {
+                "label": "Problems",
+                "log": "Error handler",
+                "playPrompt": "callflow:1351",
+                "goto": "Goodbye"
+            },
+            {
+                "label": "Goodbye",
+                "log": "Goodbye message",
+                "playPrompt": "callflow:1029",
+                "goto": "hangup"
+            }
+        ]
+
+
+def convert_mermaid_to_ivr(mermaid_code: str) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Main conversion function using sophisticated database-driven approach"""
+    converter = DatabaseDrivenIVRConverter()
+    return converter.convert(mermaid_code)
+
+
+# Enhanced Format IVR Output Functions for allflows LITE compatibility
+def format_ivr_output(ivr_nodes: List[Dict[str, Any]]) -> str:
+    """
+    Format IVR nodes into production-ready JavaScript module.exports format
+    Enhanced for full allflows LITE compatibility
+    """
+    if not ivr_nodes:
+        return "module.exports = [];"
+    
+    # Clean and format the nodes following allflows property order
+    formatted_nodes = []
+    
+    for node in ivr_nodes:
+        # Ensure all nodes have required fields
+        clean_node = {}
+        
+        # Property order from allflows: label → log/playLog → playPrompt → getDigits → branch → maxLoop → gosub → goto → nobarge → guard
+        
+        # 1. Label (required)
+        if 'label' in node:
+            clean_node['label'] = node['label']
+        
+        # 2. Log/PlayLog (documentation)
+        if 'playLog' in node:
+            clean_node['playLog'] = node['playLog']
+        elif 'log' in node:
+            clean_node['log'] = node['log']
+        
+        # 3. PlayPrompt (voice files)
+        if 'playPrompt' in node:
+            clean_node['playPrompt'] = node['playPrompt']
+        
+        # 4. GetDigits (input collection)
+        if 'getDigits' in node:
+            clean_node['getDigits'] = node['getDigits']
+        
+        # 5. Branch (conditional navigation)
+        if 'branch' in node:
+            clean_node['branch'] = node['branch']
+        
+        # 6. MaxLoop (retry logic)
+        if 'maxLoop' in node:
+            clean_node['maxLoop'] = node['maxLoop']
+        
+        # 7. Gosub (subroutine calls)
+        if 'gosub' in node:
+            clean_node['gosub'] = node['gosub']
+        
+        # 8. Goto (direct transitions)
+        if 'goto' in node:
+            clean_node['goto'] = node['goto']
+        
+        # 9. Nobarge (non-interruptible)
+        if 'nobarge' in node:
+            clean_node['nobarge'] = node['nobarge']
+        
+        # 10. Guard (conditional execution) - allflows LITE pattern
+        if 'guard' in node:
+            clean_node['guard'] = node['guard']
+        
+        # Add any other properties that might be present
+        for key, value in node.items():
+            if key not in clean_node:
+                clean_node[key] = value
+        
+        formatted_nodes.append(clean_node)
+    
+    # Convert to JavaScript format with proper formatting
+    try:
+        # Use enhanced JavaScript formatting for allflows LITE compatibility
+        js_output = _format_as_javascript_enhanced(formatted_nodes)
+        return f"module.exports = {js_output};"
+        
+    except Exception as e:
+        # Fallback to basic JSON formatting
+        json_str = json.dumps(formatted_nodes, indent=2)
+        return f"module.exports = {json_str};"
+
+def _format_as_javascript_enhanced(nodes: List[Dict[str, Any]]) -> str:
+    """Enhanced format nodes as JavaScript array with allflows LITE compatibility"""
+    lines = ["["]
+    
+    for i, node in enumerate(nodes):
+        lines.append("    {")
+        
+        # Format each property with enhanced handling
+        for j, (key, value) in enumerate(node.items()):
+            formatted_value = _format_js_value_enhanced(value)
+            comma = "," if j < len(node) - 1 else ""
+            lines.append(f'        {key}: {formatted_value}{comma}')
+        
+        closer = "    }," if i < len(nodes) - 1 else "    }"
+        lines.append(closer)
+    
+    lines.append("]")
+    
+    return "\n".join(lines)
+
+def _format_js_value_enhanced(value: Any) -> str:
+    """Enhanced format a value for JavaScript output with guard function support"""
+    if isinstance(value, str):
+        # Special handling for guard functions (allflows LITE pattern)
+        if value.startswith("function"):
+            return value  # Don't quote function definitions
+        else:
+            return f'"{value}"'
+    elif isinstance(value, list):
+        if not value:
+            return "[]"
+        
+        # Check if all items are strings
+        if all(isinstance(item, str) for item in value):
+            formatted_items = [f'"{item}"' for item in value]
+            if len(formatted_items) == 1:
+                return f'[{formatted_items[0]}]'
+            else:
+                return "[\n            " + ",\n            ".join(formatted_items) + "\n        ]"
+        else:
+            # Mixed types - use JSON formatting but handle special cases
+            formatted_items = []
+            for item in value:
+                if isinstance(item, str):
+                    formatted_items.append(f'"{item}"')
+                else:
+                    formatted_items.append(str(item))
+            
+            if len(formatted_items) == 1:
+                return f'[{formatted_items[0]}]'
+            else:
+                return "[" + ", ".join(formatted_items) + "]"
+    
+    elif isinstance(value, dict):
+        if not value:
+            return "{}"
+        
+        lines = ["{"]
+        items = list(value.items())
+        for j, (k, v) in enumerate(items):
+            formatted_v = _format_js_value_enhanced(v)
+            comma = "," if j < len(items) - 1 else ""
+            lines.append(f'            {k}: {formatted_v}{comma}')
+        lines.append("        }")
+        
+        return "\n        ".join(lines)
+    
+    elif isinstance(value, bool):
+        return "true" if value else "false"
+    elif value is None:
+        return "null"
+    else:
+        return str(value)
+
+# Enhanced validation function for the generated IVR code
+def validate_ivr_nodes(ivr_nodes: List[Dict[str, Any]]) -> List[str]:
+    """Enhanced validate IVR nodes and return list of issues found"""
+    issues = []
+    labels = set()
+    
+    for i, node in enumerate(ivr_nodes):
+        # Check required fields
+        if 'label' not in node:
+            issues.append(f"Node {i}: Missing required 'label' field")
+        else:
+            label = node['label']
+            if label in labels:
+                issues.append(f"Node {i}: Duplicate label '{label}'")
+            labels.add(label)
+        
+        # Check branch targets
+        if 'branch' in node:
+            for digit, target in node['branch'].items():
+                if target not in labels and target not in ['Problems', 'Goodbye', 'hangup']:
+                    issues.append(f"Node {i}: Branch target '{target}' not found")
+        
+        # Check goto targets
+        if 'goto' in node:
+            target = node['goto']
+            if target not in labels and target not in ['Problems', 'Goodbye', 'hangup']:
+                issues.append(f"Node {i}: Goto target '{target}' not found")
+        
+        # Check getDigits structure
+        if 'getDigits' in node:
+            get_digits = node['getDigits']
+            if not isinstance(get_digits, dict):
+                issues.append(f"Node {i}: getDigits must be an object")
+            else:
+                required_fields = ['numDigits', 'validChoices']
+                for field in required_fields:
+                    if field not in get_digits:
+                        issues.append(f"Node {i}: getDigits missing '{field}' field")
+        
+        # Check gosub structure (allflows LITE pattern)
+        if 'gosub' in node:
+            gosub = node['gosub']
+            if not isinstance(gosub, list) or len(gosub) != 3:
+                issues.append(f"Node {i}: gosub must be array of 3 elements [function, code, description]")
+        
+        # Check guard function syntax
+        if 'guard' in node:
+            guard = node['guard']
+            if not isinstance(guard, str) or not guard.startswith('function'):
+                issues.append(f"Node {i}: guard must be a function string")
+    
+    return issues
+, before_bracket)
+                            if id_match:
+                                target_id = id_match.group(1)
+                                if target_id not in node_texts:  # Don't overwrite existing text
+                                    # Extract text between quotes
+                                    target_text = target_part[quote_start + 1:quote_end]
+                                    # Clean HTML tags from text
+                                    target_text = re.sub(r'<br\s*/?>', ' ', target_text)
+                                    target_text = re.sub(r'<[^>]+>', '', target_text)
+                                    node_texts[target_id] = target_text.strip()
+                    
+                    if not target_id:
+                        # Fallback to simple ID extraction
+                        simple_match = re.match(r'^([A-Z]+)', target_part)
+                        if simple_match:
+                            target_id = simple_match.group(1)
+                    
+                    # Add connection if we found both IDs
+                    if source_id and target_id:
+                        connections.append({
+                            'source': source_id,
+                            'target': target_id,
+                            'label': connection_label
+                        })
+                        
+                except Exception as e:
+                    print(f"Error parsing line: {line} - {e}")
+                    continue
+        
+        # Fallback: If we still don't have text for a node, try to extract it more aggressively
+        for line in lines:
+            if '-->' not in line and not line.startswith('flowchart'):
+                # Try to match any node definition pattern
+                fallback_match = re.search(r'([A-Z]+)\s*[\[{]"([^"]+)"[\]}]', line)
+                if fallback_match:
+                    node_id = fallback_match.group(1)
+                    if node_id not in node_texts:
+                        node_text = fallback_match.group(2)
+                        node_text = re.sub(r'<br\s*/?>', ' ', node_text)
+                        node_text = re.sub(r'<[^>]+>', '', node_text)
+                        node_texts[node_id] = node_text.strip()
         
         # Create node objects with proper classification
         for node_id, node_text in node_texts.items():
