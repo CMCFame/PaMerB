@@ -1266,7 +1266,6 @@ def validate_ivr_nodes(ivr_nodes: List[Dict[str, Any]]) -> List[str]:
                 issues.append(f"Node {i}: guard must be a function string")
     
     return issues
-, before_bracket)
                             if id_match:
                                 source_id = id_match.group(1)
                                 # Extract text between quotes
