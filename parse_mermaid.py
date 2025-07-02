@@ -1,92 +1,113 @@
 """
-Enhanced Mermaid parser with IVR-specific functionality
+Enhanced Mermaid Parser for IVR Diagrams
+Handles complex flowcharts with decision nodes, subgraphs, and IVR-specific patterns
 """
+
+from typing import Dict, List, Optional, Set, Tuple
+from dataclasses import dataclass
 import re
-from enum import Enum, auto
-from typing import Dict, List, Optional, Union, Set
-from dataclasses import dataclass, field
+from enum import Enum
 
 class NodeType(Enum):
-    """Extended node types for IVR flows"""
-    START = auto()
-    END = auto()
-    ACTION = auto()
-    DECISION = auto()
-    INPUT = auto()
-    TRANSFER = auto()
-    SUBPROCESS = auto()
-    MENU = auto()        # New: For menu options
-    PROMPT = auto()      # New: For voice prompts
-    ERROR = auto()       # New: For error handling
-    RETRY = auto()       # New: For retry logic
+    """Types of nodes in IVR flowcharts"""
+    START = "start"
+    END = "end"
+    ACTION = "action"
+    DECISION = "decision"
+    MENU = "menu"
+    INPUT = "input"
+    TRANSFER = "transfer"
+    RECORDING = "recording"
+    VALIDATION = "validation"
 
 @dataclass
 class Node:
-    """Enhanced node representation"""
+    """Represents a node in the flowchart"""
     id: str
     raw_text: str
     node_type: NodeType
-    style_classes: List[str] = field(default_factory=list)
-    subgraph: Optional[str] = None
-    properties: Dict[str, str] = field(default_factory=dict)
     
-    def is_interactive(self) -> bool:
-        """Check if node requires user interaction"""
-        return self.node_type in {NodeType.INPUT, NodeType.MENU, NodeType.DECISION}
+    @property
+    def text(self):
+        """Get cleaned text (removing HTML tags)"""
+        # Remove HTML line breaks
+        cleaned = re.sub(r'<br\s*/?\s*>', ' ', self.raw_text)
+        # Remove other HTML tags
+        cleaned = re.sub(r'<[^>]+>', '', cleaned)
+        # Clean whitespace
+        cleaned = ' '.join(cleaned.split())
+        return cleaned
+    
+    @property
+    def lines(self):
+        """Get text split by line breaks"""
+        # Split on HTML line breaks
+        lines = re.split(r'<br\s*/?\s*>', self.raw_text)
+        # Clean each line
+        return [line.strip() for line in lines if line.strip()]
 
 @dataclass
 class Edge:
-    """Enhanced edge representation"""
+    """Represents an edge/connection in the flowchart"""
     from_id: str
     to_id: str
     label: Optional[str] = None
     style: Optional[str] = None
-    condition: Optional[str] = None  # New: For conditional flows
 
 class MermaidParser:
-    """Enhanced Mermaid parser with IVR focus"""
+    """
+    Enhanced parser for Mermaid flowcharts
+    Specifically designed for IVR call flow diagrams
+    """
     
     def __init__(self):
+        # IVR-specific node patterns
         self.node_patterns = {
-            NodeType.START: [
-                r'\bstart\b', r'\bbegin\b', r'\bentry\b', 
-                r'\binitial\b', r'\bstart call\b'
-            ],
-            NodeType.END: [
-                r'\bend\b', r'\bstop\b', r'\bdone\b', 
-                r'\bterminate\b', r'\bend call\b', r'\bhangup\b'
-            ],
-            NodeType.DECISION: [
-                r'\?', r'\{.*\}', r'\bchoice\b', r'\bif\b',
-                r'\bpress\b', r'\bselect\b', r'\boption\b'
+            NodeType.MENU: [
+                r'press\s+\d+',
+                r'if\s+yes.*press',
+                r'available\s+to\s+work',
+                r'are\s+you\s+available'
             ],
             NodeType.INPUT: [
-                r'\binput\b', r'\benter\b', r'\bprompt\b', 
-                r'\bget\b', r'\bdigits\b', r'\bpin\b'
+                r'enter.*pin',
+                r'enter.*digits?',
+                r'input.*number'
+            ],
+            NodeType.DECISION: [
+                r'valid\s+pin\?',
+                r'correct\s+pin\?',
+                r'entered\s+digits?\?',
+                r'transfer\s+available\?'
+            ],
+            NodeType.END: [
+                r'goodbye',
+                r'disconnect',
+                r'end\s+of\s+call',
+                r'thank\s+you.*goodbye'
+            ],
+            NodeType.START: [
+                r'welcome',
+                r'this\s+is\s+an?\s+\w+\s+callout'
+            ],
+            NodeType.RECORDING: [
+                r'recording',
+                r'leave.*message',
+                r'record.*response'
             ],
             NodeType.TRANSFER: [
-                r'\btransfer\b', r'\broute\b', r'\bdispatch\b',
-                r'\bforward\b', r'\bconnect\b'
-            ],
-            NodeType.MENU: [
-                r'\bmenu\b', r'\boptions\b', r'\bselect\b',
-                r'\bchoices\b'
-            ],
-            NodeType.PROMPT: [
-                r'\bplay\b', r'\bspeak\b', r'\bannounce\b',
-                r'\bmessage\b'
-            ],
-            NodeType.ERROR: [
-                r'\berror\b', r'\bfail\b', r'\binvalid\b',
-                r'\bretry\b', r'\btimeout\b'
+                r'transfer',
+                r'connect',
+                r'agent'
             ]
         }
-
+        
+        # Edge pattern mapping
         self.edge_patterns = {
-            # Standard connection
-            r'-->': '',
-            # Labeled connection with possible DTMF
-            r'--\|(.*?)\|->': 'label',
+            r'-->': 'arrow',
+            r'==>': 'thick',
+            r'-\.-': 'dotted',
+            r'--\|(.+?)\|->': 'label',
             # Dotted connection for optional flows
             r'-\.->\s*': 'optional',
             # Thick connection for primary paths
@@ -206,7 +227,8 @@ class MermaidParser:
     def _parse_edge(self, line: str) -> Optional[Edge]:
         """Parse edge definition"""
         for pattern, style in self.edge_patterns.items():
-            match = re.search(f'(\w+)\s*{pattern}\s*(\w+)', line)
+            # Use raw string for regex pattern
+            match = re.search(rf'(\w+)\s*{pattern}\s*(\w+)', line)
             if match:
                 from_id, to_id = match.groups()
                 label = None
@@ -242,3 +264,29 @@ def parse_mermaid(mermaid_text: str) -> Dict:
     """Convenience wrapper for parsing Mermaid diagrams"""
     parser = MermaidParser()
     return parser.parse(mermaid_text)
+
+# Command-line testing
+if __name__ == "__main__":
+    test_diagram = """
+    flowchart TD
+        A["Welcome<br/>This is an electric callout from Level 2.<br/>Press 1 if this is employee."]
+        B{"Valid PIN?"}
+        C["Enter PIN<br/>Please enter your 4 digit PIN<br/>followed by the pound key."]
+        D["Goodbye<br/>Thank you.<br/>Goodbye."]
+        
+        A -->|"1"| C
+        C --> B
+        B -->|"yes"| D
+        B -->|"no"| C
+    """
+    
+    parser = MermaidParser()
+    result = parser.parse(test_diagram)
+    
+    print("Nodes:")
+    for node_id, node in result['nodes'].items():
+        print(f"  {node_id}: {node.node_type.value} - {node.text[:50]}...")
+    
+    print("\nEdges:")
+    for edge in result['edges']:
+        print(f"  {edge.from_id} --> {edge.to_id} ({edge.label or 'no label'})")

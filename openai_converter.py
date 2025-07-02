@@ -6,6 +6,8 @@ from typing import Dict, List, Any
 from openai import OpenAI
 import json
 import logging
+import base64
+import os
 
 # Import enhanced components
 from enhanced_ivr_converter import EnhancedIVRConverter
@@ -13,6 +15,88 @@ from enhanced_ivr_converter import EnhancedIVRConverter
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
+
+def process_flow_diagram(image_path: str, api_key: str) -> str:
+    """
+    Convert a flowchart image to Mermaid diagram using GPT-4 Vision
+    
+    Args:
+        image_path: Path to the flowchart image file
+        api_key: OpenAI API key
+        
+    Returns:
+        Mermaid diagram code as string
+    """
+    try:
+        # Initialize OpenAI client
+        client = OpenAI(api_key=api_key)
+        
+        # Encode the image
+        with open(image_path, "rb") as image_file:
+            base64_image = base64.b64encode(image_file.read()).decode('utf-8')
+        
+        # Prepare the prompt for GPT-4 Vision
+        prompt = """You are an expert at converting flowcharts to Mermaid diagram syntax.
+
+        Analyze this flowchart image and convert it to a Mermaid diagram following these rules:
+        1. Use flowchart TD (top-down) syntax
+        2. Identify node types:
+           - Rectangles = action nodes (use ["text"])
+           - Diamonds = decision nodes (use {"text"})
+           - Rounded rectangles = start/end nodes (use (["text"]))
+        3. Label edges with decision outcomes (yes/no, 1/2/3, etc.)
+        4. Preserve all text exactly as shown in the image
+        5. Use <br/> for line breaks within nodes
+        6. Maintain the flow logic precisely
+
+        Example format:
+        flowchart TD
+        A["Welcome<br/>Press 1 for yes"] -->|"1"| B{"Decision"}
+        B -->|"yes"| C["Action"]
+        B -->|"no"| D["Other Action"]
+
+        Generate ONLY the Mermaid code, no explanations."""
+
+        # Call GPT-4 Vision
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{base64_image}"
+                            }
+                        }
+                    ]
+                }
+            ],
+            max_tokens=2000
+        )
+        
+        # Extract the Mermaid code
+        mermaid_code = response.choices[0].message.content.strip()
+        
+        # Clean up the response if needed
+        if mermaid_code.startswith("```"):
+            # Remove code blocks if present
+            lines = mermaid_code.split('\n')
+            if lines[0].strip() in ['```', '```mermaid']:
+                lines = lines[1:]
+            if lines[-1].strip() == '```':
+                lines = lines[:-1]
+            mermaid_code = '\n'.join(lines)
+        
+        logger.info("Successfully converted image to Mermaid diagram")
+        return mermaid_code
+        
+    except Exception as e:
+        logger.error(f"Failed to process flow diagram: {str(e)}")
+        raise Exception(f"Image conversion failed: {str(e)}")
+
 
 class OpenAIIVRConverter:
     """
@@ -104,55 +188,41 @@ class OpenAIIVRConverter:
              }}
            }}
 
-        4. Standard Navigation:
-           - Extract menu choices from edge labels (e.g., "Press 1" -> choice "1")
-           - Map choices to target nodes in branch object
-           - Include error handling for invalid/timeout conditions
+        4. Special Nodes:
+           - "Problems" node for error handling
+           - "End" or "Disconnect" for call termination
+           - Use descriptive labels instead of single letters
 
-        5. Response Actions:
-           For final actions, use gosub calls like:
-           {{"gosub": ["SaveCallResult", "RESPONSE_CODE", "DESCRIPTION"]}}
-
-        Generate a complete, working IVR configuration. Use DESCRIPTIVE placeholders for audio prompts.
-
-        Mermaid diagram:
+        Mermaid diagram to convert:
         {mermaid_code}
 
-        Return only the JavaScript module in format: module.exports = [...];"""
+        Generate a complete, valid JavaScript module.exports array with IVR configuration objects.
+        """
 
         try:
             response = self.client.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are an expert IVR system developer. Focus on logical flow structure and use descriptive placeholders instead of hard-coded audio IDs."
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ],
-                temperature=0.1,
-                max_tokens=4000
+                model="gpt-4",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2,
+                max_tokens=2000
             )
-
-            # Extract and clean the response
+            
             ivr_code = response.choices[0].message.content.strip()
             
-            # Extract JavaScript code
-            if "module.exports = [" in ivr_code:
-                start_idx = ivr_code.find("module.exports = [")
-                end_idx = ivr_code.rfind("];") + 2
-                ivr_code = ivr_code[start_idx:end_idx]
-
-            # Validate structure
-            if not (ivr_code.startswith("module.exports = [") and ivr_code.endswith("];")):
-                raise ValueError("Invalid IVR code format generated")
-
-            # Add warning about placeholders
+            # Clean up response
+            if ivr_code.startswith("```"):
+                lines = ivr_code.split('\n')
+                start_idx = 1
+                end_idx = len(lines) - 1
+                
+                if lines[-1].strip() == "```":
+                    end_idx -= 1
+                    
+                ivr_code = '\n'.join(lines[start_idx:end_idx])
+            
+            # Add warning comment about placeholders
             warning_comment = '''/**
- * WARNING: This IVR code contains placeholder audio prompts.
+ * WARNING: This IVR configuration uses placeholder audio IDs.
  * Use enhanced audio mapping to get real audio file IDs.
  * Placeholders like ["WELCOME_MESSAGE"] need to be replaced with actual audio IDs.
  */
@@ -228,46 +298,28 @@ def batch_convert_diagrams(diagrams: List[str], api_key: str,
                           audio_database_path: str = "cf_general_structure.csv",
                           company: str = "arcos", schema: str = None) -> List[Dict[str, Any]]:
     """
-    Convert multiple Mermaid diagrams to IVR configurations
+    Convert multiple Mermaid diagrams in batch
     
-    Returns:
-        List of conversion results with metadata
+    Returns list of results with diagram index, success status, and output
     """
     converter = OpenAIIVRConverter(api_key, audio_database_path)
     results = []
     
-    for i, diagram in enumerate(diagrams):
+    for idx, diagram in enumerate(diagrams):
         try:
-            js_code = converter.convert_to_ivr(diagram, company, schema)
+            ivr_code = converter.convert_to_ivr(diagram, company, schema)
             results.append({
-                "index": i,
+                "index": idx,
                 "success": True,
-                "js_code": js_code,
+                "output": ivr_code,
                 "error": None
             })
         except Exception as e:
             results.append({
-                "index": i,
+                "index": idx,
                 "success": False,
-                "js_code": None,
+                "output": None,
                 "error": str(e)
             })
     
     return results
-
-
-# Configuration helper
-def create_converter_config(audio_database_path: str = None, 
-                           company: str = None, 
-                           schema: str = None) -> Dict[str, str]:
-    """Helper to create converter configuration"""
-    config = {}
-    
-    if audio_database_path:
-        config["audio_database_path"] = audio_database_path
-    if company:
-        config["company"] = company  
-    if schema:
-        config["schema"] = schema
-        
-    return config
