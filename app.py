@@ -96,6 +96,19 @@ def format_ivr_output(ivr_dict: list) -> str:
 
 def main():
     st.title("🔄 Enhanced Mermaid-to-IVR Converter")
+    st.subheader("📚 Voice Database Configuration")
+    uploaded_csv = st.file_uploader(
+        "Upload cf_general_structure.csv for accurate voice file matching",
+        type=['csv'],
+        help="Upload the real voice database to dramatically reduce 'NEW_VOICE_NEEDED' entries"
+    )
+    
+    if uploaded_csv:
+        st.success(f"✅ Voice database uploaded: {uploaded_csv.name} ({uploaded_csv.size:,} bytes)")
+        st.info("💡 The converter will now use your real voice database for much better matching!")
+    else:
+        st.warning("⚠️ No voice database uploaded - using fallback database (many voices will show as 'needed')")
+        
     st.markdown("""
     **Production-Ready IVR Code Generator**
     
@@ -211,7 +224,7 @@ def main():
                             return
 
                     # Convert using enhanced converter
-                    ivr_flow_dict, notes = convert_mermaid_to_ivr(mermaid_text)
+                    ivr_flow_dict, notes = convert_mermaid_to_ivr(mermaid_text, uploaded_csv)
                     
                     # Format for display and download
                     js_output = format_ivr_output(ivr_flow_dict)

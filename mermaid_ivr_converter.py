@@ -34,14 +34,116 @@ class VoiceFile:
     callflow_id: str
 
 class ProductionIVRConverter:
-    def __init__(self):
+    def __init__(self, uploaded_csv_file=None):
         # Real voice file database (8,555 entries)
         self.voice_files: List[VoiceFile] = []
         self.transcript_index: Dict[str, List[VoiceFile]] = {}
         self.exact_match_index: Dict[str, VoiceFile] = {}
         
-        # Load the REAL database
-        self._load_real_database()
+        # Load the database - either from uploaded file or fallback
+        if uploaded_csv_file:
+            self._load_database_from_upload(uploaded_csv_file)
+        else:
+            self._load_real_database()
+
+    def _load_database_from_upload(self, uploaded_file):
+        """Load database from uploaded cf_general_structure.csv file"""
+        try:
+            print(f"📥 Loading database from uploaded file: {uploaded_file.name}")
+            
+            # Read the uploaded CSV file
+            import io
+            content = uploaded_file.read()
+            
+            # Handle both bytes and string content
+            if isinstance(content, bytes):
+                content = content.decode('utf-8')
+            
+            # Parse CSV content
+            csv_reader = csv.DictReader(io.StringIO(content))
+            
+            # Debug: Check column names
+            fieldnames = csv_reader.fieldnames
+            print(f"📋 CSV columns found: {fieldnames}")
+            
+            row_count = 0
+            for row in csv_reader:
+                row_count += 1
+                
+                # Extract callflow ID from file name (e.g., "1677.ulaw" → "1677")
+                file_name = row.get('File Name', row.get('file_name', ''))
+                callflow_id = self._extract_callflow_id(file_name)
+                
+                voice_file = VoiceFile(
+                    company=row.get('Company', row.get('company', '')),
+                    folder=row.get('Folder', row.get('folder', '')),
+                    file_name=file_name,
+                    transcript=row.get('Transcript', row.get('transcript', '')),
+                    callflow_id=callflow_id
+                )
+                self.voice_files.append(voice_file)
+                
+                # Debug first few entries
+                if row_count <= 5:
+                    print(f"📝 Sample entry {row_count}: {voice_file.transcript[:50]} -> {callflow_id}")
+            
+            # Build search indexes
+            self._build_indexes()
+            print(f"✅ Successfully loaded {len(self.voice_files)} voice files from uploaded CSV")
+            
+            # Verify we have key common phrases
+            self._verify_database_content()
+            
+        except Exception as e:
+            print(f"❌ Failed to load uploaded database: {e}")
+            print("🔄 Falling back to remote database...")
+            self._load_real_database()
+
+    def _verify_database_content(self):
+        """Verify database has expected content and show examples"""
+        print(f"\n🔍 DATABASE VERIFICATION:")
+        print(f"📊 Total voice files: {len(self.voice_files)}")
+        
+        # Check for common phrases we expect to find
+        common_phrases = [
+            "this is an", "electric", "callout", "press 1", "press 3", 
+            "thank you", "goodbye", "invalid", "available", "work"
+        ]
+        
+        found_phrases = []
+        missing_phrases = []
+        
+        for phrase in common_phrases:
+            matches = [vf for vf in self.voice_files if phrase.lower() in vf.transcript.lower()]
+            if matches:
+                found_phrases.append(phrase)
+                # Show first match
+                best_match = min(matches, key=lambda x: len(x.transcript))
+                print(f"✅ '{phrase}' found: '{best_match.transcript}' -> {best_match.callflow_id}")
+            else:
+                missing_phrases.append(phrase)
+                print(f"❌ '{phrase}' NOT found in database")
+        
+        print(f"\n📈 SUMMARY: Found {len(found_phrases)}/{len(common_phrases)} common phrases")
+        
+        # Show some random samples from the database
+        import random
+        if len(self.voice_files) > 10:
+            print(f"\n📝 RANDOM SAMPLES:")
+            samples = random.sample(self.voice_files, min(10, len(self.voice_files)))
+            for i, sample in enumerate(samples, 1):
+                print(f"  {i}. '{sample.transcript}' -> {sample.callflow_id} ({sample.folder})")
+        
+        # Show folder distribution
+        folder_counts = {}
+        for vf in self.voice_files:
+            folder_counts[vf.folder] = folder_counts.get(vf.folder, 0) + 1
+        
+        print(f"\n📁 FOLDER DISTRIBUTION:")
+        for folder, count in sorted(folder_counts.items()):
+            print(f"  {folder}: {count} files")
+        
+        return len(found_phrases) >= len(common_phrases) * 0.7  # At least 70% should be found
 
     def _load_real_database(self):
         """Load the actual cf_general_structure.csv with 8,555 voice files"""
@@ -915,7 +1017,7 @@ class ProductionIVRConverter:
         ]
 
 # Main function for the app
-def convert_mermaid_to_ivr(mermaid_code: str) -> Tuple[List[Dict[str, Any]], List[str]]:
-    """Production-ready conversion function"""
-    converter = ProductionIVRConverter()
+def convert_mermaid_to_ivr(mermaid_code: str, uploaded_csv_file=None) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Production-ready conversion function with optional CSV upload"""
+    converter = ProductionIVRConverter(uploaded_csv_file)
     return converter.convert_mermaid_to_ivr(mermaid_code)
