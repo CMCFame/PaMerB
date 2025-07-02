@@ -1542,9 +1542,3 @@ def convert_mermaid_to_ivr(mermaid_code: str, uploaded_csv_file=None) -> Tuple[L
                 'playPrompt': 'callflow:1029'
             }
         ]
-
-# Main function for the app
-def convert_mermaid_to_ivr(mermaid_code: str, uploaded_csv_file=None) -> Tuple[List[Dict[str, Any]], List[str]]:
-    """Production-ready conversion function with optional CSV upload"""
-    converter = ProductionIVRConverter(uploaded_csv_file)
-    return converter.convert_mermaid_to_ivr(mermaid_code)
