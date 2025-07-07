@@ -283,6 +283,26 @@ class ProductionIVRConverter:
         # For alphanumeric IDs (e.g., "PRS1NEU.ulaw" → "PRS1NEU")
         return base_name
 
+    def _build_indexes(self):
+        """Build search indexes for fast voice file lookup - ENHANCED with phrase index"""
+        self.transcript_index.clear()
+        self.exact_match_index.clear()
+        
+        for voice_file in self.voice_files:
+            # Exact match index
+            transcript_clean = voice_file.transcript.lower().strip()
+            self.exact_match_index[transcript_clean] = voice_file
+            
+            # Word-based index for partial matching
+            words = re.findall(r'\b\w+\b', transcript_clean)
+            for word in words:
+                if word not in self.transcript_index:
+                    self.transcript_index[word] = []
+                self.transcript_index[word].append(voice_file)
+        
+        # NEW: Build phrase index for methodical segmentation
+        self._build_phrase_index()
+
     def _build_phrase_index(self):
         """Build a dynamic phrase index from the actual loaded voice database"""
         self.phrase_index = {}
