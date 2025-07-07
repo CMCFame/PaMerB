@@ -283,44 +283,113 @@ class ProductionIVRConverter:
         # For alphanumeric IDs (e.g., "PRS1NEU.ulaw" → "PRS1NEU")
         return base_name
 
-    def _build_indexes(self):
-        """Build search indexes for fast voice file lookup"""
-        self.transcript_index.clear()
-        self.exact_match_index.clear()
+    def _build_phrase_index(self):
+        """Build a dynamic phrase index from the actual loaded voice database"""
+        self.phrase_index = {}
+        
+        print(f"🔍 Building phrase index from {len(self.voice_files)} voice files...")
         
         for voice_file in self.voice_files:
-            # Exact match index
-            transcript_clean = voice_file.transcript.lower().strip()
-            self.exact_match_index[transcript_clean] = voice_file
+            transcript = voice_file.transcript.strip()
+            if len(transcript) >= 2:  # Minimum length to avoid single letters
+                transcript_lower = transcript.lower()
+                
+                # Index by transcript length for longest-match-first
+                length = len(transcript)
+                if length not in self.phrase_index:
+                    self.phrase_index[length] = {}
+                
+                self.phrase_index[length][transcript_lower] = voice_file
+        
+        # Sort lengths in descending order for longest-match-first
+        self.sorted_lengths = sorted(self.phrase_index.keys(), reverse=True)
+        
+        phrase_count = sum(len(phrases) for phrases in self.phrase_index.values())
+        print(f"✅ Built phrase index: {phrase_count} phrases across {len(self.sorted_lengths)} length categories")
+        
+        # Show some statistics
+        if self.sorted_lengths:
+            longest = self.sorted_lengths[0]
+            shortest = self.sorted_lengths[-1] 
+            print(f"📏 Phrase lengths: {shortest}-{longest} characters")
             
-            # Word-based index for partial matching
-            words = re.findall(r'\b\w+\b', transcript_clean)
-            for word in words:
-                if word not in self.transcript_index:
-                    self.transcript_index[word] = []
-                self.transcript_index[word].append(voice_file)
+            # Show some examples of longest phrases
+            if longest in self.phrase_index:
+                examples = list(self.phrase_index[longest].keys())[:3]
+                print(f"📝 Longest phrases: {examples}")
 
-    def _find_voice_file_match(self, text: str) -> Optional[VoiceFile]:
-        """Find matching voice file using Andres's exact search methodology"""
-        text_clean = text.lower().strip()
+    def _find_longest_database_match(self, text: str) -> Optional[Tuple[VoiceFile, int]]:
+        """Find the longest phrase match from the database for the given text"""
+        text_lower = text.lower()
         
-        # First: Try exact match (Andres's preferred method)
-        if text_clean in self.exact_match_index:
-            return self.exact_match_index[text_clean]
+        # Try longest phrases first (greedy approach)
+        for length in self.sorted_lengths:
+            if length > len(text):
+                continue  # Skip phrases longer than remaining text
+                
+            # Check if text starts with any phrase of this length
+            prefix = text_lower[:length]
+            if prefix in self.phrase_index[length]:
+                voice_file = self.phrase_index[length][prefix]
+                return voice_file, length
         
-        # Second: Try fuzzy matching
-        best_match = None
-        best_score = 0.0
+        return None
+
+    def _get_semantic_fallback(self, segment: str) -> Optional[str]:
+        """Generate intelligent fallbacks based on semantic meaning and common patterns"""
+        segment_lower = segment.lower().strip()
         
-        for voice_file in self.voice_files:
-            transcript_clean = voice_file.transcript.lower().strip()
-            score = SequenceMatcher(None, text_clean, transcript_clean).ratio()
+        # METHODICAL: Build fallbacks based on semantic categories
+        semantic_patterns = {
+            # Press instructions
+            'press_patterns': {
+                'patterns': [r'press\s*(\d+)', r'(\d+)\s*-', r'key\s*(\d+)'],
+                'handler': lambda match: f"standard:PRS{match.group(1)}NEU" if match else None
+            },
             
-            if score > 0.8 and score > best_score:
-                best_score = score
-                best_match = voice_file
+            # Greetings and closings
+            'greeting_patterns': {
+                'keywords': ['welcome', 'hello', 'greetings'],
+                'fallback': 'callflow:WELCOME'
+            },
+            'closing_patterns': {
+                'keywords': ['goodbye', 'thank you', 'thanks'],
+                'fallback': 'callflow:THANKYOU'
+            },
+            
+            # Error handling
+            'error_patterns': {
+                'keywords': ['invalid', 'error', 'wrong', 'incorrect', 'try again'],
+                'fallback': 'callflow:1009'
+            },
+            
+            # Availability
+            'availability_patterns': {
+                'keywords': ['available', 'work', 'accept', 'ready'],
+                'fallback': 'callflow:AVAILABLE'
+            },
+            
+            # System references
+            'system_patterns': {
+                'keywords': ['system', 'callout', 'electric', 'gas'],
+                'fallback': 'callflow:1290'
+            }
+        }
         
-        return best_match
+        # Check press patterns first (most specific)
+        for pattern in semantic_patterns['press_patterns']['patterns']:
+            match = re.search(pattern, segment_lower)
+            if match:
+                return semantic_patterns['press_patterns']['handler'](match)
+        
+        # Check keyword-based patterns
+        for category, config in semantic_patterns.items():
+            if 'keywords' in config:
+                for keyword in config['keywords']:
+                    if keyword in segment_lower:
+                        return config['fallback']
+        
+        return None
 
     def _detect_variables_dynamically(self, text: str) -> Dict[str, str]:
         """Dynamically detect variables without hardcoded patterns"""
@@ -359,7 +428,7 @@ class ProductionIVRConverter:
         return variables
 
     def _segment_text_like_andres(self, text: str, variables: Dict[str, str]) -> List[str]:
-        """ENHANCED: Segment text with ARCOS production phrases for better matching"""
+        """METHODICAL: Database-driven segmentation using longest-match-first algorithm"""
         # Replace variables first
         processed_text = text
         for var_placeholder, var_replacement in variables.items():
@@ -369,91 +438,84 @@ class ProductionIVRConverter:
         processed_text = re.sub(r'<br\s*/?>', ' ', processed_text)
         processed_text = re.sub(r'\s+', ' ', processed_text).strip()
         
-        print(f"🔍 Enhanced segmenting: '{processed_text}'")
+        print(f"🔍 Database-driven segmenting: '{processed_text}'")
         
         segments = []
         remaining_text = processed_text
         
-        # ENHANCED: Priority order with ARCOS production phrases
-        while remaining_text and len(segments) < 20:  # Safety limit
+        iteration = 0
+        max_iterations = 25
+        
+        while remaining_text.strip() and iteration < max_iterations:
+            iteration += 1
             found_match = False
             
-            # STEP 1: ARCOS production phrases (from real voice files) + existing effective phrases
-            arcos_production_phrases = [
-                # From ARCOS CSV (1002, 1005, 1006, 1004, 1009, etc.)
-                "press 1 if this is", "press 3 if you need more time to get", 
-                "to the phone", "is not home", "invalid entry. please try again",
-                "please enter your four digit pin followed by the pound key",
-                "please enter your four digit pin", "automated voice response system", 
-                "press 2 with", "press 4 to repeat this message",
+            # STEP 1: Try to find longest database phrase match
+            match_result = self._find_longest_database_match(remaining_text)
+            
+            if match_result:
+                voice_file, match_length = match_result
+                matched_text = remaining_text[:match_length]
+                segments.append(matched_text)
                 
-                # Keep existing effective phrases
-                "this is an electric callout", "this is an", "this is a", 
-                "electric callout", "callout reason", "trouble location",
-                "thank you goodbye", "thank you", "goodbye", 
-                "press 1", "press 3", "press 7", "press 9",
-                "are you available", "available to work", "work this callout",
-                "accepted response", "callout decline", "qualified no",
-                "employee not home", "press any key"
-            ]
+                # Update remaining text
+                remaining_text = remaining_text[match_length:].strip()
+                remaining_text = re.sub(r'^[.,;:!\?\s]+', '', remaining_text)
+                
+                found_match = True
+                print(f"✅ Database phrase: '{matched_text}' -> {voice_file.callflow_id}")
             
-            # Sort by length (longest first) for better matching
-            arcos_production_phrases.sort(key=len, reverse=True)
-            
-            for phrase in arcos_production_phrases:
-                if remaining_text.lower().startswith(phrase.lower()):
-                    segments.append(phrase)
-                    remaining_text = remaining_text[len(phrase):].strip()
-                    remaining_text = re.sub(r'^[.,;:!\?]\s*', '', remaining_text)
-                    found_match = True
-                    print(f"🎯 ARCOS/production phrase: '{phrase}'")
-                    break
-            
+            # STEP 2: If no database match, try common word boundaries
             if not found_match:
-                # STEP 2: Look for complete words in database (minimum 3 characters to avoid letters)
-                best_match = None
-                best_length = 0
+                # Look for natural phrase boundaries (punctuation, conjunctions)
+                boundary_patterns = [
+                    r'^([^,;\.!]+)[,;\.!]\s*',  # Up to punctuation
+                    r'^(.*?)\s+(and|or|if|but|then|when|where|because)\s+',  # Up to conjunction
+                    r'^(\S+\s+\S+)\s+',  # Two words
+                    r'^(\S+)\s+',  # Single word
+                ]
                 
-                for voice_file in self.voice_files:
-                    transcript = voice_file.transcript.strip()
-                    # ONLY consider matches of 3+ characters to avoid single letters
-                    if (len(transcript) >= 3 and 
-                        remaining_text.lower().startswith(transcript.lower())):
-                        if len(transcript) > best_length:
-                            best_match = voice_file
-                            best_length = len(transcript)
-                
-                if best_match:
-                    match_text = remaining_text[:best_length]
-                    segments.append(match_text)
-                    remaining_text = remaining_text[best_length:].strip()
-                    remaining_text = re.sub(r'^[.,;:!\?]\s*', '', remaining_text)
-                    found_match = True
-                    print(f"✅ Enhanced database match: '{match_text}' -> {best_match.callflow_id}")
+                for pattern in boundary_patterns:
+                    match = re.match(pattern, remaining_text, re.IGNORECASE)
+                    if match:
+                        matched_text = match.group(1).strip()
+                        
+                        # Avoid single letters unless they're meaningful
+                        if len(matched_text) >= 2 or matched_text.lower() in ['a', 'i']:
+                            segments.append(matched_text)
+                            remaining_text = remaining_text[len(match.group(0)):].strip()
+                            found_match = True
+                            print(f"📝 Boundary match: '{matched_text}'")
+                            break
             
+            # STEP 3: If still no match, take next word (avoid single letters)
             if not found_match:
-                # STEP 3: Take complete words (avoid breaking into letters)
                 words = remaining_text.split()
                 if words:
                     first_word = words[0]
-                    # Remove punctuation from the word
                     clean_word = re.sub(r'[.,;:!\?]$', '', first_word)
-                    # Only add words with 2+ characters to avoid single letters
+                    
                     if len(clean_word) >= 2:
                         segments.append(clean_word)
                         remaining_text = ' '.join(words[1:])
-                        print(f"📝 Complete word: '{clean_word}'")
+                        print(f"📝 Word: '{clean_word}'")
                         found_match = True
                     else:
-                        # Skip single letters entirely to prevent over-segmentation
+                        # Skip single letters to prevent over-segmentation
                         remaining_text = ' '.join(words[1:])
-                        print(f"⏭️ Skipped single letter: '{clean_word}'")
+                        print(f"⏭️ Skipped: '{clean_word}'")
                         found_match = True
                 else:
                     break
+            
+            # Safety check
+            if not found_match:
+                print(f"⚠️ No progress made, breaking segmentation")
+                break
         
-        print(f"🎯 Enhanced segmentation result: {segments}")
-        return segments if segments else [processed_text]
+        final_segments = segments if segments else [processed_text]
+        print(f"🎯 Database-driven result: {final_segments}")
+        return final_segments
 
     def _generate_voice_prompts(self, segments: List[str], variables: Dict[str, str]) -> Tuple[List[str], List[str]]:
         """ENHANCED: Generate playLog and playPrompt with ARCOS production voice files"""
@@ -488,12 +550,12 @@ class ProductionIVRConverter:
                     play_log.append(segment)
                     play_prompt.append(segment)
             else:
-                # Look up in real database first (existing logic preserved)
+                # STEP 1: Try exact database match first
                 voice_match = self._find_voice_file_match(segment)
                 if voice_match:
                     play_log.append(segment)
                     
-                    # Generate proper voice reference based on folder (existing logic)
+                    # Generate proper voice reference based on folder
                     if voice_match.folder == "company":
                         prompt_ref = f"company:{voice_match.callflow_id}"
                     elif voice_match.folder == "standard":
@@ -504,53 +566,40 @@ class ProductionIVRConverter:
                         prompt_ref = f"callflow:{voice_match.callflow_id}"
                     
                     play_prompt.append(prompt_ref)
-                    print(f"✅ Database match: '{segment}' -> {prompt_ref}")
+                    print(f"✅ Database exact match: '{segment}' -> {prompt_ref}")
                 else:
-                    # ENHANCED: Smart fallbacks with ARCOS production voice files
-                    play_log.append(segment)
+                    # STEP 2: Try partial matches (substring search)
+                    partial_matches = []
+                    segment_lower = segment.lower().strip()
                     
-                    # Enhanced smart fallbacks using real ARCOS voice files + existing fallbacks
-                    enhanced_arcos_fallbacks = {
-                        # NEW: Real ARCOS production voice files from CSV
-                        "press 1 if this is": "callflow:1002",
-                        "press 3 if you need more time to get": "callflow:1005", 
-                        "to the phone": "callflow:1006",
-                        "is not home": "callflow:1004",
-                        "invalid entry. please try again": "callflow:1009",
-                        "please enter your four digit pin": "callflow:1008",
-                        "automated voice response system": "callflow:1001",
-                        "press 2 with": "callflow:1003",
-                        "press 4 to repeat this message": "callflow:1007",
-                        
-                        # Common variations and shorter phrases from ARCOS
-                        "press 1": "callflow:1002",  # Use ARCOS version
-                        "press 3": "callflow:1005",  # Use ARCOS version  
-                        "invalid entry": "callflow:1009",  # Use ARCOS version
-                        "please enter": "callflow:1008",
-                        "not home": "callflow:1004",
-                        
-                        # Keep existing working fallbacks
-                        "this is an": "callflow:1677",
-                        "electric callout": "type:electric",
-                        "electric": "type:electric",
-                        "callout": "callflow:1274",
-                        "welcome": "callflow:WELCOME",
-                        "thank you": "callflow:THANKYOU",
-                        "goodbye": "callflow:GOODBYE",
-                        "press 7": "standard:PRS7NEU",
-                        "press 9": "standard:PRS9NEU",
-                        "press any key": "callflow:1265",
-                        "available": "callflow:AVAILABLE"
-                    }
+                    for voice_file in self.voice_files:
+                        transcript_lower = voice_file.transcript.lower().strip()
+                        # Check if segment is contained in transcript or vice versa
+                        if (segment_lower in transcript_lower or 
+                            transcript_lower in segment_lower):
+                            similarity = len(set(segment_lower.split()) & set(transcript_lower.split()))
+                            partial_matches.append((voice_file, similarity))
                     
-                    segment_lower = segment.lower()
-                    if segment_lower in enhanced_arcos_fallbacks:
-                        prompt_ref = enhanced_arcos_fallbacks[segment_lower]
+                    if partial_matches:
+                        # Sort by similarity and take best match
+                        partial_matches.sort(key=lambda x: x[1], reverse=True)
+                        best_match = partial_matches[0][0]
+                        
+                        play_log.append(segment)
+                        prompt_ref = f"callflow:{best_match.callflow_id}"
                         play_prompt.append(prompt_ref)
-                        print(f"🎯 ARCOS fallback: '{segment}' -> {prompt_ref}")
+                        print(f"🎯 Partial match: '{segment}' -> {prompt_ref} ('{best_match.transcript}')")
                     else:
-                        play_prompt.append(f"NEW_VOICE_NEEDED:{segment}")
-                        print(f"❓ Still needs voice: '{segment}'")
+                        # STEP 3: Use intelligent fallbacks based on semantic meaning
+                        play_log.append(segment)
+                        fallback_ref = self._get_semantic_fallback(segment)
+                        
+                        if fallback_ref:
+                            play_prompt.append(fallback_ref)
+                            print(f"🧠 Semantic fallback: '{segment}' -> {fallback_ref}")
+                        else:
+                            play_prompt.append(f"NEW_VOICE_NEEDED:{segment}")
+                            print(f"❓ No match found: '{segment}' -> needs new voice file")
         
         return play_log, play_prompt
 
