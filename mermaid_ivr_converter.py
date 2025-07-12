@@ -17,7 +17,7 @@ from difflib import SequenceMatcher
 
 class NodeType(Enum):
     WELCOME = "welcome"
-    DECISION = "decision"
+    DECISION = "decision" 
     ACTION = "action"
     PIN_ENTRY = "pin_entry"
     RESPONSE = "response"
@@ -46,7 +46,7 @@ class ProductionIVRConverter:
             self._load_database_from_upload(uploaded_csv_file)
         else:
             self._load_real_database()
-
+            
     def _find_voice_file_match(self, segment: str) -> Optional[VoiceFile]:
         """Find an exact match for the segment in the voice file database."""
         segment_clean = segment.lower().strip()
@@ -86,7 +86,7 @@ class ProductionIVRConverter:
                 
                 voice_file = VoiceFile(
                     company=company,
-                    folder=row.get('Folder', row.get('folder', ''))
+                    folder=row.get('Folder', row.get('folder', '')),
                     file_name=file_name,
                     transcript=row.get('Transcript', row.get('transcript', '')),
                     callflow_id=callflow_id
