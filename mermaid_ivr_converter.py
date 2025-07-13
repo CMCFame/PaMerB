@@ -763,12 +763,12 @@ class ProductionIVRConverter:
             
             # Availability questions
             if "available" in text_lower and "work" in text_lower:
-                return "Available For Callout"
+                return "Offer" # Changed to Offer as it's more standard
             
             # Response actions
-            if "accept" in text_lower and "response" in text_lower:
+            if "accepted" in text_lower and ("response" in text_lower or "recorded" in text_lower):
                 return "Accept"
-            elif "decline" in text_lower:
+            elif "decline" in text_lower and ("response" in text_lower or "recorded" in text_lower):
                 return "Decline"
             elif "not home" in text_lower:
                 return "Not Home"
@@ -776,11 +776,11 @@ class ProductionIVRConverter:
                 return "Qualified No"
             
             # Sleep/wait
-            if ("more time" in text_lower or "continue" in text_lower or "press any key" in text_lower) and "message" in text_lower:
+            if ("more time" in text_lower or "continue" in text_lower or "press any key" in text_lower):
                 return "Sleep"
             
             # Goodbye
-            if "goodbye" in text_lower or ("thank you" in text_lower and "goodbye" in text_lower):
+            if "goodbye" in text_lower:
                 return "Goodbye"
             elif "disconnect" in text_lower:
                 return "Disconnect"
@@ -807,42 +807,20 @@ class ProductionIVRConverter:
                     return "Check PIN"
                 elif "this is employee" in text_lower or "employee" in text_lower:
                     return "Verify Employee"
-                elif len(node_text.split()) <= 3:
-                    return node_text.title()
-            
-            # Fallback: Generate from first few words
+                elif len(node_text.split()) <= 4:
+                    # Capitalize first letter of each word
+                    return ' '.join(word.capitalize() for word in node_text.split())
+
+            # Fallback: Generate from first few meaningful words
             words = re.findall(r'\b[A-Za-z]+\b', node_text)
             if words:
-                # Take first 2-3 meaningful words
-                meaningful_words = [w for w in words[:3] if len(w) > 2 and w.lower() not in ['the', 'and', 'for', 'you', 'this', 'that']]
+                meaningful_words = [w for w in words[:3] if len(w) > 2 and w.lower() not in ['the', 'and', 'for', 'you', 'this', 'that', 'is', 'a']]
                 if meaningful_words:
                     return ' '.join(word.capitalize() for word in meaningful_words)
         
-        # Fallback based on node ID patterns
-        id_mapping = {
-            'A': 'Live Answer',
-            'B': 'Verify Employee', 
-            'C': 'Sleep',
-            'D': 'Not Home',
-            'E': 'Check Input',
-            'F': 'Invalid Entry',
-            'G': 'Check PIN',
-            'H': 'Electric Callout',
-            'I': 'Callout Reason',
-            'J': 'Trouble Location',
-            'K': 'Custom Message',
-            'L': 'Available For Callout',
-            'M': 'Accept',
-            'N': 'Decline',
-            'O': 'Qualified No',
-            'P': 'Goodbye',
-            'Q': 'Disconnect'
-        }
-        if node_id and node_id in id_mapping:
-            return id_mapping[node_id]
-        
-        # Last resort: Use node type
-        return f"{node_type.value.replace('_', ' ').title()} {node_id}"
+        # Last resort: Use node type and ID
+        return f"{node_type.value.replace('_', ' ').title()}_{node_id}"
+
 
     def _create_ivr_node(self, node: Dict, connections: List[Dict], label: str, node_id_to_label: Dict[str, str] = None) -> Dict[str, Any]:
         """Create IVR node following allflows LITE patterns"""
@@ -874,19 +852,17 @@ class ProductionIVRConverter:
             ivr_node['playPrompt'] = play_prompt[0]
         
         # Add interaction logic based on node type
-        if node_type in [NodeType.WELCOME, NodeType.AVAILABILITY, NodeType.DECISION]:
+        if node_type in [NodeType.WELCOME, NodeType.AVAILABILITY, NodeType.DECISION, NodeType.PIN_ENTRY, NodeType.INPUT]:
             self._add_input_logic(ivr_node, connections, node, node_id_to_label)
         elif node_type == NodeType.RESPONSE:
             self._add_response_logic(ivr_node, label)
-        elif len(connections) == 1:
-            # Simple goto
-            target_id = connections[0]['target']
-            if node_id_to_label and target_id in node_id_to_label:
-                target_label = node_id_to_label[target_id]
-            else:
-                target_label = self._generate_meaningful_label("", NodeType.ACTION, target_id)
-            ivr_node['goto'] = target_label
         
+        # Add goto for nodes with a single, unconditional path
+        if len(connections) == 1 and not ivr_node.get('branch'):
+            target_id = connections[0]['target']
+            target_label = node_id_to_label.get(target_id, self._generate_meaningful_label("", NodeType.ACTION, target_id))
+            ivr_node['goto'] = target_label
+
         return ivr_node
 
     def _add_input_logic(self, ivr_node: Dict, connections: List[Dict], node: Dict, node_id_to_label: Dict[str, str] = None):
@@ -901,86 +877,66 @@ class ProductionIVRConverter:
         for conn in connections:
             label = conn.get('label', '').lower()
             target = conn['target']
-            
-            # Use the pre-computed label if available
-            if node_id_to_label and target in node_id_to_label:
-                target_label = node_id_to_label[target]
-            else:
-                target_label = self._generate_meaningful_label("", NodeType.ACTION, target)
+            target_label = node_id_to_label.get(target, self._generate_meaningful_label("", NodeType.ACTION, target))
             
             print(f"🔀 Processing connection label: '{label}' -> {target} ({target_label})")
             
             # Extract digit from various label formats
-            if re.search(r'\b1\b', label) or 'press 1' in label:
-                valid_choices.append('1')
-                branch_map['1'] = target_label
-            elif re.search(r'\b3\b', label) or 'press 3' in label:
-                valid_choices.append('3')
-                branch_map['3'] = target_label
-            elif re.search(r'\b7\b', label) or 'press 7' in label:
-                valid_choices.append('7')
-                branch_map['7'] = target_label
-            elif re.search(r'\b9\b', label) or 'press 9' in label:
-                valid_choices.append('9')
-                branch_map['9'] = target_label
-            elif re.search(r'\b0\b', label) or 'press 0' in label:
-                valid_choices.append('0')
-                branch_map['0'] = target_label
+            digit_match = re.search(r'\b(\d+)\b', label)
+            if digit_match:
+                choice = digit_match.group(1)
+                valid_choices.append(choice)
+                branch_map[choice] = target_label
             elif any(phrase in label for phrase in ['no input', 'timeout', 'none']):
                 branch_map['none'] = target_label
-            elif any(phrase in label for phrase in ['invalid', 'error', 'retry']):
+            elif any(phrase in label for phrase in ['invalid', 'error', 'retry', 'no']):
                 branch_map['error'] = target_label
-            elif any(phrase in label for phrase in ['yes', 'correct']):
-                branch_map['yes'] = target_label  # For yes/no decisions
-            elif any(phrase in label for phrase in ['no', 'incorrect']):
-                branch_map['no'] = target_label   # For yes/no decisions
-            else:
-                # Default connection or self-loop
-                if conn['source'] == conn['target']:
-                    # Self-loop for retry
-                    continue
-                else:
-                    # Direct connection without input
-                    if not branch_map:
-                        ivr_node['goto'] = target_label
-                        return
-        
+            elif any(phrase in label for phrase in ['yes', 'correct', 'accept', 'decline', 'qualified', 'home', 'digits']):
+                # This is likely a post-input branch, not a choice itself
+                # Check if it's a direct outcome of a previous choice
+                if not any(str(d) in label for d in range(10)):
+                    # Not a numbered choice, likely a status branch
+                    branch_map[label.split(' ')[0]] = target_label
+
         # Add getDigits configuration
         if valid_choices:
             ivr_node['getDigits'] = {
                 'numDigits': 1,
                 'maxTime': 7,
+                'maxTries': 3,
                 'validChoices': '|'.join(sorted(set(valid_choices))),
-                'errorPrompt': 'callflow:1009'
+                'errorPrompt': 'callflow:1009',
+                'nonePrompt': 'callflow:1009', # Added for timeouts
             }
             
-            # Add error handling if not already specified
+            # Add error/none handling if not already specified
             if 'error' not in branch_map:
-                branch_map['error'] = 'Problems'
-            if 'none' not in branch_map and 'timeout' not in branch_map:
-                branch_map['none'] = 'Problems'
+                # Find a node that looks like an error handler
+                error_target = next((c['target'] for c in connections if 'invalid' in c.get('label','').lower() or 'retry' in c.get('label','').lower()), None)
+                branch_map['error'] = node_id_to_label.get(error_target, 'Problems')
+            if 'none' not in branch_map:
+                branch_map['none'] = branch_map['error'] # Default timeout to error
             
             ivr_node['branch'] = branch_map
             print(f"✅ Added input logic: choices={valid_choices}, branches={branch_map}")
-        elif branch_map:
-            # Yes/no style decision without numeric input
-            ivr_node['branch'] = branch_map
-            print(f"✅ Added decision logic: branches={branch_map}")
-        else:
-            print(f"⚠️ No input logic detected for connections: {[c['label'] for c in connections]}")
 
     def _add_response_logic(self, ivr_node: Dict, label: str):
         """Add gosub for response handling like allflows LITE"""
-        if 'accept' in label.lower():
+        label_lower = label.lower()
+        if 'accept' in label_lower:
             ivr_node['gosub'] = ['SaveCallResult', 1001, 'Accept']
-        elif 'decline' in label.lower():
+        elif 'decline' in label_lower:
             ivr_node['gosub'] = ['SaveCallResult', 1002, 'Decline']
-        elif 'not home' in label.lower():
+        elif 'not home' in label_lower:
             ivr_node['gosub'] = ['SaveCallResult', 1006, 'NotHome']
+        elif 'qualified' in label_lower:
+            ivr_node['gosub'] = ['SaveCallResult', 1145, 'QualNo']
         else:
+            # If it's a response node without a clear action, just go to Goodbye
             ivr_node['goto'] = 'Goodbye'
 
-    def convert_mermaid_to_ivr(self, mermaid_code: str) -> Tuple[List[Dict[str, Any]], List[str]]:
+
+    def convert_mermaid_to_ivr(self, mermaid_code: str, uploaded_csv_file=None) -> Tuple[List[Dict[str, Any]], List[str]]:
         """Main conversion method - PRODUCTION READY WITH DEBUGGING"""
         notes = []
         
@@ -1054,7 +1010,8 @@ class ProductionIVRConverter:
                 ivr_nodes.append({
                     'label': 'Goodbye',
                     'log': 'Thank you goodbye',
-                    'playPrompt': 'callflow:1029'
+                    'playPrompt': 'callflow:1029',
+                    'goto': 'hangup' # Added hangup for completeness
                 })
                 notes.append("Added standard 'Goodbye' termination")
             
@@ -1083,7 +1040,8 @@ class ProductionIVRConverter:
             {
                 'label': 'Goodbye',
                 'log': 'Thank you goodbye',
-                'playPrompt': 'callflow:1029'
+                'playPrompt': 'callflow:1029',
+                'goto': 'hangup'
             }
         ]
 
