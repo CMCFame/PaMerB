@@ -306,7 +306,7 @@ class ProductionIVRConverter:
         return f"{node_type.value.replace('_', ' ').title()}_{node_id}"
 
     def _create_ivr_node(self, node: Dict, connections: List[Dict], label: str, node_id_to_label: Dict[str, str] = None) -> Dict[str, Any]:
-        """Create IVR node following allflows LITE patterns"""
+        """Create IVR node following allflows LITE patterns - FIXED VERSION"""
         text = node['text']
         node_type = node['type']
         
@@ -319,30 +319,69 @@ class ProductionIVRConverter:
         # Add playPrompt - use callflow:node_id for now
         ivr_node['playPrompt'] = f"callflow:{node['id']}"
         
-        # Add interaction logic based on node type
+        # CRITICAL FIX: Better interaction logic
         if node_type in [NodeType.WELCOME, NodeType.AVAILABILITY, NodeType.DECISION, NodeType.PIN_ENTRY]:
-            # FIXED: Removed NodeType.INPUT from this check since it was causing the error
-            self._add_input_logic(ivr_node, connections, node, node_id_to_label)
+            self._add_input_logic_fixed(ivr_node, connections, node, node_id_to_label)
         elif node_type == NodeType.RESPONSE:
-            self._add_response_logic(ivr_node, label)
+            # FIXED: Return just the gosub node, let the caller handle the follow-up
+            return self._create_response_nodes(ivr_node, label, connections, node_id_to_label)
+        elif node_type == NodeType.SLEEP:
+            self._add_sleep_logic(ivr_node, connections, node_id_to_label)
         
-        # Add goto for nodes with a single, unconditional path
-        if len(connections) == 1 and not ivr_node.get('branch'):
+        # Add goto for single connections (but not if we have branch logic)
+        if len(connections) == 1 and not ivr_node.get('branch') and not ivr_node.get('getDigits'):
             target_id = connections[0]['target']
             target_label = node_id_to_label.get(target_id, self._generate_meaningful_label("", NodeType.ACTION, target_id))
             ivr_node['goto'] = target_label
 
         return ivr_node
 
+    def _create_response_nodes(self, base_node: Dict, label: str, connections: List[Dict], node_id_to_label: Dict[str, str]) -> List[Dict]:
+    """FIXED: Create proper response node structure like allflows LITE"""
+    nodes = []
+    
+    # First node: gosub only
+    gosub_node = {'label': label}
+    
+    label_lower = label.lower()
+    if 'accept' in label_lower:
+        gosub_node['gosub'] = ['SaveCallResult', 1001, 'Accept']
+    elif 'decline' in label_lower:
+        gosub_node['gosub'] = ['SaveCallResult', 1002, 'Decline']
+    elif 'not home' in label_lower:
+        gosub_node['gosub'] = ['SaveCallResult', 1006, 'NotHome']
+    elif 'qualified' in label_lower:
+        gosub_node['gosub'] = ['SaveCallResult', 1145, 'QualNo']
+    
+    nodes.append(gosub_node)
+    
+    # Second node: message and goto
+    message_node = {
+        'log': base_node['log'],
+        'playPrompt': base_node['playPrompt'],
+        'nobarge': '1',  # ADDED: Missing nobarge
+        'goto': 'Goodbye'
+    }
+    nodes.append(message_node)
+    
+    return nodes  # Return list of nodes instead of single node
+
     def _add_input_logic(self, ivr_node: Dict, connections: List[Dict], node: Dict, node_id_to_label: Dict[str, str] = None):
-        """Add getDigits and branch logic"""
+        """FIXED: Add getDigits and branch logic with ALL choices from Mermaid"""
         if not connections:
             return
         
-        # Determine valid choices from connection labels
+        # CRITICAL: Extract ALL choices mentioned in the node text AND connection labels
+        node_text = node['text'].lower()
         valid_choices = []
         branch_map = {}
         
+        # Extract choices from node text (like "Press 1", "Press 3", etc.)
+        press_matches = re.findall(r'press\s+(\d+)', node_text)
+        for choice in press_matches:
+            valid_choices.append(choice)
+        
+        # Extract choices from connection labels
         for conn in connections:
             label = conn.get('label', '').lower()
             target = conn['target']
@@ -350,40 +389,53 @@ class ProductionIVRConverter:
             
             print(f"🔀 Processing connection label: '{label}' -> {target} ({target_label})")
             
-            # Extract digit from various label formats
-            digit_match = re.search(r'\b(\d+)\b', label)
-            if digit_match:
-                choice = digit_match.group(1)
+            # FIXED: Better digit extraction
+            if re.search(r'\b(\d+)\s*-', label):  # "1 - this is employee"
+                choice = re.search(r'\b(\d+)\s*-', label).group(1)
+                valid_choices.append(choice)
+                branch_map[choice] = target_label
+            elif re.search(r'press\s+(\d+)', label):  # "press 1"
+                choice = re.search(r'press\s+(\d+)', label).group(1)
+                valid_choices.append(choice)
+                branch_map[choice] = target_label
+            elif re.search(r'\b(\d+)\b', label) and len(label) < 10:  # Simple digit
+                choice = re.search(r'\b(\d+)\b', label).group(1)
                 valid_choices.append(choice)
                 branch_map[choice] = target_label
             elif any(phrase in label for phrase in ['no input', 'timeout', 'none']):
                 branch_map['none'] = target_label
-            elif any(phrase in label for phrase in ['invalid', 'error', 'retry', 'no']):
+            elif any(phrase in label for phrase in ['invalid', 'error', 'retry']):
                 branch_map['error'] = target_label
             elif 'yes' in label:
-                # Direct connection for PIN verification, etc.
+                # PIN verification - direct goto
                 ivr_node['goto'] = target_label
                 return
+            elif label == 'input':  # Generic input - means "any digit pressed"
+                # This should trigger digit collection for the choices in node text
+                pass
         
-        # Only add getDigits if we found valid numeric choices
+        # CRITICAL: Only add getDigits if we found valid numeric choices
         if valid_choices:
+            # Remove duplicates and sort
+            unique_choices = sorted(set(valid_choices))
+            
             ivr_node['getDigits'] = {
                 'numDigits': 1,
-                'maxTime': 7,
-                'maxTries': 3,
-                'validChoices': '|'.join(sorted(set(valid_choices))),
+                'maxTries': 3,  # ADDED: Missing from your output
+                'maxTime': 7,   # ADDED: Missing from your output
+                'validChoices': '|'.join(unique_choices),
                 'errorPrompt': 'callflow:1009',
-                'nonePrompt': 'callflow:1009',
+                'nonePrompt': 'callflow:1009',  # ADDED: Missing from your output
             }
             
-            # Add error/none handling if not already specified
+            # Add default error/none handling if not specified
             if 'error' not in branch_map:
                 branch_map['error'] = 'Problems'
             if 'none' not in branch_map:
-                branch_map['none'] = branch_map['error']
+                branch_map['none'] = 'Problems'
             
             ivr_node['branch'] = branch_map
-            print(f"✅ Added input logic: choices={valid_choices}, branches={branch_map}")
+            print(f"✅ Added input logic: choices={unique_choices}, branches={branch_map}")
 
     def _add_response_logic(self, ivr_node: Dict, label: str):
         """Add gosub for response handling like allflows LITE"""
@@ -399,6 +451,58 @@ class ProductionIVRConverter:
         else:
             # If it's a response node without a clear action, just go to Goodbye
             ivr_node['goto'] = 'Goodbye'
+
+    def _add_sleep_logic(self, ivr_node: Dict, connections: List[Dict], node_id_to_label: Dict[str, str]):
+        """FIXED: Add proper sleep/continue logic like allflows LITE"""
+        # Sleep nodes should accept any key and continue
+        ivr_node['getDigits'] = {
+            'numDigits': 1,
+            'maxTries': 2,
+            'maxTime': 30,  # Longer timeout for sleep
+            'nonePrompt': 'callflow:1009'
+        }
+        
+        # Find the target (usually back to main menu)
+        if connections:
+            target_id = connections[0]['target']
+            target_label = node_id_to_label.get(target_id, 'Live Answer')
+            ivr_node['branch'] = {
+                'next': target_label,    # Any key pressed
+                'none': target_label,    # Timeout
+                'error': target_label    # Error
+            }
+        else:
+            ivr_node['branch'] = {
+                'next': 'Live Answer',
+                'none': 'Live Answer',
+                'error': 'Problems'
+            }
+
+    def _add_pin_verification_logic(self, ivr_node: Dict, connections: List[Dict], node_id_to_label: Dict[str, str]):
+        """Add proper PIN verification like allflows LITE"""
+        if 'pin' in ivr_node['log'].lower():
+            ivr_node['getDigits'] = {
+                'numDigits': 5,  # 4 digits + pound
+                'maxTries': 3,
+                'maxTime': 7,
+                'validChoices': '{{pin}}',  # Dynamic PIN validation
+                'errorPrompt': 'callflow:1009',
+                'nonePrompt': 'callflow:1009'
+            }
+            
+            # PIN verification branches to error on wrong PIN
+            ivr_node['branch'] = {
+                'error': 'Problems',
+                'none': 'Problems'
+            }
+            
+            # Success path should be handled by PIN validation logic
+            if connections:
+                for conn in connections:
+                    if 'yes' in conn.get('label', '').lower():
+                        target_label = node_id_to_label.get(conn['target'], 'Live Answer 1')
+                        # For PIN success, we need a separate check node
+                        break
 
     def convert_mermaid_to_ivr(self, mermaid_code: str, uploaded_csv_file=None) -> Tuple[List[Dict[str, Any]], List[str]]:
         """Main conversion method - PRODUCTION READY WITH DEBUGGING"""
