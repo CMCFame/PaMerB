@@ -1,6 +1,7 @@
 """
-FIXED VERSION - mermaid_ivr_converter.py
-This version fixes the NodeType.INPUT error and ensures proper IVR code generation
+COMPLETE FIXED VERSION - mermaid_ivr_converter.py
+This version fixes all issues to generate proper allflows LITE compliant IVR code
+Replace your entire mermaid_ivr_converter.py file with this code
 """
 
 import re
@@ -133,9 +134,6 @@ class ProductionIVRConverter:
         """Parse Mermaid diagram into nodes and connections"""
         nodes = []
         connections = []
-        
-        # Extract nodes with improved regex
-        node_pattern = r'([A-Z]+)\s*\[\s*"([^"]+)"\s*\]|([A-Z]+)\s*\{\s*"([^"]+)"\s*\}'
         
         # Extract rectangular nodes (actions/prompts)
         for match in re.finditer(r'([A-Z]+)\s*\[\s*"([^"]+)"\s*\]', mermaid_code):
@@ -305,8 +303,8 @@ class ProductionIVRConverter:
         # Last resort: Use node type and ID
         return f"{node_type.value.replace('_', ' ').title()}_{node_id}"
 
-    def _create_ivr_node(self, node: Dict, connections: List[Dict], label: str, node_id_to_label: Dict[str, str] = None) -> Dict[str, Any]:
-        """Create IVR node following allflows LITE patterns - FIXED VERSION"""
+    def _create_ivr_node(self, node: Dict, connections: List[Dict], label: str, node_id_to_label: Dict[str, str] = None) -> List[Dict[str, Any]]:
+        """Create IVR node(s) following allflows LITE patterns - RETURNS LIST"""
         text = node['text']
         node_type = node['type']
         
@@ -319,12 +317,13 @@ class ProductionIVRConverter:
         # Add playPrompt - use callflow:node_id for now
         ivr_node['playPrompt'] = f"callflow:{node['id']}"
         
-        # CRITICAL FIX: Better interaction logic
+        # FIXED: Handle response nodes specially (return multiple nodes)
+        if node_type == NodeType.RESPONSE:
+            return self._create_response_nodes(ivr_node, label, connections, node_id_to_label)
+        
+        # Add interaction logic based on node type
         if node_type in [NodeType.WELCOME, NodeType.AVAILABILITY, NodeType.DECISION, NodeType.PIN_ENTRY]:
             self._add_input_logic_fixed(ivr_node, connections, node, node_id_to_label)
-        elif node_type == NodeType.RESPONSE:
-            # FIXED: Return just the gosub node, let the caller handle the follow-up
-            return self._create_response_nodes(ivr_node, label, connections, node_id_to_label)
         elif node_type == NodeType.SLEEP:
             self._add_sleep_logic(ivr_node, connections, node_id_to_label)
         
@@ -334,39 +333,9 @@ class ProductionIVRConverter:
             target_label = node_id_to_label.get(target_id, self._generate_meaningful_label("", NodeType.ACTION, target_id))
             ivr_node['goto'] = target_label
 
-        return ivr_node
+        return [ivr_node]  # Return as list for consistency
 
-    def _create_response_nodes(self, base_node: Dict, label: str, connections: List[Dict], node_id_to_label: Dict[str, str]) -> List[Dict]:
-    """FIXED: Create proper response node structure like allflows LITE"""
-    nodes = []
-    
-    # First node: gosub only
-    gosub_node = {'label': label}
-    
-    label_lower = label.lower()
-    if 'accept' in label_lower:
-        gosub_node['gosub'] = ['SaveCallResult', 1001, 'Accept']
-    elif 'decline' in label_lower:
-        gosub_node['gosub'] = ['SaveCallResult', 1002, 'Decline']
-    elif 'not home' in label_lower:
-        gosub_node['gosub'] = ['SaveCallResult', 1006, 'NotHome']
-    elif 'qualified' in label_lower:
-        gosub_node['gosub'] = ['SaveCallResult', 1145, 'QualNo']
-    
-    nodes.append(gosub_node)
-    
-    # Second node: message and goto
-    message_node = {
-        'log': base_node['log'],
-        'playPrompt': base_node['playPrompt'],
-        'nobarge': '1',  # ADDED: Missing nobarge
-        'goto': 'Goodbye'
-    }
-    nodes.append(message_node)
-    
-    return nodes  # Return list of nodes instead of single node
-
-    def _add_input_logic(self, ivr_node: Dict, connections: List[Dict], node: Dict, node_id_to_label: Dict[str, str] = None):
+    def _add_input_logic_fixed(self, ivr_node: Dict, connections: List[Dict], node: Dict, node_id_to_label: Dict[str, str] = None):
         """FIXED: Add getDigits and branch logic with ALL choices from Mermaid"""
         if not connections:
             return
@@ -398,7 +367,7 @@ class ProductionIVRConverter:
                 choice = re.search(r'press\s+(\d+)', label).group(1)
                 valid_choices.append(choice)
                 branch_map[choice] = target_label
-            elif re.search(r'\b(\d+)\b', label) and len(label) < 10:  # Simple digit
+            elif re.search(r'\b(\d+)\b', label) and len(label) < 15:  # Simple digit like "3 - decline"
                 choice = re.search(r'\b(\d+)\b', label).group(1)
                 valid_choices.append(choice)
                 branch_map[choice] = target_label
@@ -413,12 +382,17 @@ class ProductionIVRConverter:
             elif label == 'input':  # Generic input - means "any digit pressed"
                 # This should trigger digit collection for the choices in node text
                 pass
+            elif label == '':  # Empty label - direct connection
+                if not valid_choices:  # Only use for goto if no digit choices
+                    ivr_node['goto'] = target_label
+                    return
         
         # CRITICAL: Only add getDigits if we found valid numeric choices
         if valid_choices:
             # Remove duplicates and sort
             unique_choices = sorted(set(valid_choices))
             
+            # FIXED: Add all missing properties for allflows LITE compliance
             ivr_node['getDigits'] = {
                 'numDigits': 1,
                 'maxTries': 3,  # ADDED: Missing from your output
@@ -436,21 +410,6 @@ class ProductionIVRConverter:
             
             ivr_node['branch'] = branch_map
             print(f"✅ Added input logic: choices={unique_choices}, branches={branch_map}")
-
-    def _add_response_logic(self, ivr_node: Dict, label: str):
-        """Add gosub for response handling like allflows LITE"""
-        label_lower = label.lower()
-        if 'accept' in label_lower:
-            ivr_node['gosub'] = ['SaveCallResult', 1001, 'Accept']
-        elif 'decline' in label_lower:
-            ivr_node['gosub'] = ['SaveCallResult', 1002, 'Decline']
-        elif 'not home' in label_lower:
-            ivr_node['gosub'] = ['SaveCallResult', 1006, 'NotHome']
-        elif 'qualified' in label_lower:
-            ivr_node['gosub'] = ['SaveCallResult', 1145, 'QualNo']
-        else:
-            # If it's a response node without a clear action, just go to Goodbye
-            ivr_node['goto'] = 'Goodbye'
 
     def _add_sleep_logic(self, ivr_node: Dict, connections: List[Dict], node_id_to_label: Dict[str, str]):
         """FIXED: Add proper sleep/continue logic like allflows LITE"""
@@ -478,31 +437,35 @@ class ProductionIVRConverter:
                 'error': 'Problems'
             }
 
-    def _add_pin_verification_logic(self, ivr_node: Dict, connections: List[Dict], node_id_to_label: Dict[str, str]):
-        """Add proper PIN verification like allflows LITE"""
-        if 'pin' in ivr_node['log'].lower():
-            ivr_node['getDigits'] = {
-                'numDigits': 5,  # 4 digits + pound
-                'maxTries': 3,
-                'maxTime': 7,
-                'validChoices': '{{pin}}',  # Dynamic PIN validation
-                'errorPrompt': 'callflow:1009',
-                'nonePrompt': 'callflow:1009'
-            }
-            
-            # PIN verification branches to error on wrong PIN
-            ivr_node['branch'] = {
-                'error': 'Problems',
-                'none': 'Problems'
-            }
-            
-            # Success path should be handled by PIN validation logic
-            if connections:
-                for conn in connections:
-                    if 'yes' in conn.get('label', '').lower():
-                        target_label = node_id_to_label.get(conn['target'], 'Live Answer 1')
-                        # For PIN success, we need a separate check node
-                        break
+    def _create_response_nodes(self, base_node: Dict, label: str, connections: List[Dict], node_id_to_label: Dict[str, str]) -> List[Dict]:
+        """FIXED: Create proper response node structure like allflows LITE"""
+        nodes = []
+        
+        # First node: gosub only
+        gosub_node = {'label': label}
+        
+        label_lower = label.lower()
+        if 'accept' in label_lower:
+            gosub_node['gosub'] = ['SaveCallResult', 1001, 'Accept']
+        elif 'decline' in label_lower:
+            gosub_node['gosub'] = ['SaveCallResult', 1002, 'Decline']
+        elif 'not home' in label_lower:
+            gosub_node['gosub'] = ['SaveCallResult', 1006, 'NotHome']
+        elif 'qualified' in label_lower:
+            gosub_node['gosub'] = ['SaveCallResult', 1145, 'QualNo']
+        
+        nodes.append(gosub_node)
+        
+        # Second node: message and goto
+        message_node = {
+            'log': base_node['log'],
+            'playPrompt': base_node['playPrompt'],
+            'nobarge': '1',  # ADDED: Missing nobarge for non-interruptible messages
+            'goto': 'Goodbye'
+        }
+        nodes.append(message_node)
+        
+        return nodes
 
     def convert_mermaid_to_ivr(self, mermaid_code: str, uploaded_csv_file=None) -> Tuple[List[Dict[str, Any]], List[str]]:
         """Main conversion method - PRODUCTION READY WITH DEBUGGING"""
@@ -554,12 +517,14 @@ class ProductionIVRConverter:
                 node_connections = [c for c in connections if c['source'] == node['id']]
                 print(f"🔗 Found {len(node_connections)} outgoing connections")
                 
-                # Create IVR node with node mapping for better branch labels
-                ivr_node = self._create_ivr_node(node, node_connections, label, node_id_to_label)
-                ivr_nodes.append(ivr_node)
+                # Create IVR node(s) - can return multiple nodes for responses
+                created_nodes = self._create_ivr_node(node, node_connections, label, node_id_to_label)
                 
-                notes.append(f"Generated node: {label}")
-                print(f"✅ Generated IVR node: {label}")
+                # Add all created nodes
+                for created_node in created_nodes:
+                    ivr_nodes.append(created_node)
+                    notes.append(f"Generated node: {created_node['label']}")
+                    print(f"✅ Generated IVR node: {created_node['label']}")
             
             # Add standard termination nodes if not present
             if not any(node.get('label') == 'Problems' for node in ivr_nodes):
