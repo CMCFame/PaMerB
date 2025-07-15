@@ -1,7 +1,6 @@
 """
-COMPLETE FIXED VERSION - mermaid_ivr_converter.py
-This version fixes all issues to generate proper allflows LITE compliant IVR code
-Replace your entire mermaid_ivr_converter.py file with this code
+FIXED KeyError VERSION - mermaid_ivr_converter.py
+This version fixes the KeyError: 'label' issue in response node creation
 """
 
 import re
@@ -24,7 +23,7 @@ class NodeType(Enum):
     ERROR = "error"
     SLEEP = "sleep"
     AVAILABILITY = "availability"
-    INPUT = "input"  # FIXED: Added missing INPUT type
+    INPUT = "input"
 
 @dataclass
 class VoiceFile:
@@ -395,11 +394,11 @@ class ProductionIVRConverter:
             # FIXED: Add all missing properties for allflows LITE compliance
             ivr_node['getDigits'] = {
                 'numDigits': 1,
-                'maxTries': 3,  # ADDED: Missing from your output
-                'maxTime': 7,   # ADDED: Missing from your output
+                'maxTries': 3,
+                'maxTime': 7,
                 'validChoices': '|'.join(unique_choices),
                 'errorPrompt': 'callflow:1009',
-                'nonePrompt': 'callflow:1009',  # ADDED: Missing from your output
+                'nonePrompt': 'callflow:1009',
             }
             
             # Add default error/none handling if not specified
@@ -417,7 +416,7 @@ class ProductionIVRConverter:
         ivr_node['getDigits'] = {
             'numDigits': 1,
             'maxTries': 2,
-            'maxTime': 30,  # Longer timeout for sleep
+            'maxTime': 30,
             'nonePrompt': 'callflow:1009'
         }
         
@@ -426,9 +425,9 @@ class ProductionIVRConverter:
             target_id = connections[0]['target']
             target_label = node_id_to_label.get(target_id, 'Live Answer')
             ivr_node['branch'] = {
-                'next': target_label,    # Any key pressed
-                'none': target_label,    # Timeout
-                'error': target_label    # Error
+                'next': target_label,
+                'none': target_label,
+                'error': target_label
             }
         else:
             ivr_node['branch'] = {
@@ -438,11 +437,11 @@ class ProductionIVRConverter:
             }
 
     def _create_response_nodes(self, base_node: Dict, label: str, connections: List[Dict], node_id_to_label: Dict[str, str]) -> List[Dict]:
-        """FIXED: Create proper response node structure like allflows LITE"""
+        """FIXED: Create proper response node structure like allflows LITE - ENSURES ALL NODES HAVE LABELS"""
         nodes = []
         
-        # First node: gosub only
-        gosub_node = {'label': label}
+        # First node: gosub only - ENSURE IT HAS A LABEL
+        gosub_node = {'label': label}  # This should already have the label
         
         label_lower = label.lower()
         if 'accept' in label_lower:
@@ -456,15 +455,17 @@ class ProductionIVRConverter:
         
         nodes.append(gosub_node)
         
-        # Second node: message and goto
+        # Second node: message and goto - CRITICAL FIX: ADD A LABEL
         message_node = {
+            'label': f"{label} Message",  # FIXED: Add a unique label for the message node
             'log': base_node['log'],
             'playPrompt': base_node['playPrompt'],
-            'nobarge': '1',  # ADDED: Missing nobarge for non-interruptible messages
+            'nobarge': '1',
             'goto': 'Goodbye'
         }
         nodes.append(message_node)
         
+        print(f"✅ Created response nodes: '{gosub_node['label']}' and '{message_node['label']}'")
         return nodes
 
     def convert_mermaid_to_ivr(self, mermaid_code: str, uploaded_csv_file=None) -> Tuple[List[Dict[str, Any]], List[str]]:
@@ -520,8 +521,13 @@ class ProductionIVRConverter:
                 # Create IVR node(s) - can return multiple nodes for responses
                 created_nodes = self._create_ivr_node(node, node_connections, label, node_id_to_label)
                 
-                # Add all created nodes
+                # FIXED: Add safety check for created nodes
                 for created_node in created_nodes:
+                    # Ensure every node has a label before adding
+                    if 'label' not in created_node:
+                        print(f"⚠️ WARNING: Node missing label, adding fallback: {created_node}")
+                        created_node['label'] = f"Node_{len(ivr_nodes)}"
+                    
                     ivr_nodes.append(created_node)
                     notes.append(f"Generated node: {created_node['label']}")
                     print(f"✅ Generated IVR node: {created_node['label']}")
