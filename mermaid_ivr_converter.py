@@ -1,6 +1,6 @@
 """
-ARCOS-Integrated Production IVR Converter
-Prioritizes ARCOS recordings as foundation with client-specific overrides
+FLEXIBLE PRODUCTION IVR CONVERTER
+Works for ANY flow type - not hardcoded to specific patterns
 """
 
 import re
@@ -21,7 +21,7 @@ class VoiceFile:
     callflow_id: str
     priority: int  # Higher = better (ARCOS = 100, client-specific = 200)
 
-class ARCOSIntegratedConverter:
+class FlexibleARCOSConverter:
     def __init__(self, cf_general_csv=None, arcos_csv=None):
         # Voice file databases with priority system
         self.voice_files: List[VoiceFile] = []
@@ -101,6 +101,15 @@ class ARCOSIntegratedConverter:
             ("To confirm receipt", "1035"),
             ("Problems", "1351"),
             ("I'm sorry you are having problems", "1351"),
+            
+            # PIN and validation
+            ("Your PIN cannot be", "1139"),
+            ("Please enter your new four digit PIN", "1097"),
+            ("Please re-enter your new four digit PIN", "1097"),
+            ("Your pin has been changed successfully", "1100"),
+            ("Your name has been successfully changed", "1104"),
+            ("The automated system needs your spoken name", "1164"),
+            ("Match to first entry", "1703"),
             
             # Standard press options
             ("Press 7", "PRS7NEU"),
@@ -202,18 +211,18 @@ class ARCOSIntegratedConverter:
         print(f"✅ {len(self.callflow_index)} unique callflow IDs available")
 
     def convert_mermaid_to_ivr(self, mermaid_code: str) -> Tuple[List[Dict], str]:
-        """Convert Mermaid to IVR using ARCOS-integrated approach"""
-        print(f"\n🚀 Starting ARCOS-integrated conversion...")
+        """Convert Mermaid to IVR using FLEXIBLE approach"""
+        print(f"\n🚀 Starting flexible conversion...")
         
         # Parse the Mermaid diagram
         nodes, connections = self._parse_mermaid_enhanced(mermaid_code)
         if not nodes:
             raise ValueError("No nodes found in Mermaid diagram")
         
-        # Create node ID to label mapping
+        # Create node ID to label mapping with FLEXIBLE labeling
         node_id_to_label = {}
         for node_id, node_text in nodes.items():
-            meaningful_label = self._generate_production_label(node_text, node_id)
+            meaningful_label = self._generate_flexible_label(node_text, node_id)
             node_id_to_label[node_id] = meaningful_label
         
         print(f"📋 Node mappings: {node_id_to_label}")
@@ -229,13 +238,13 @@ class ARCOSIntegratedConverter:
         # Process any remaining nodes
         for node_id in nodes:
             if node_id not in processed_nodes:
-                ivr_node = self._convert_node_to_ivr(node_id, nodes[node_id], connections, node_id_to_label)
+                ivr_node = self._convert_node_to_ivr_flexible(node_id, nodes[node_id], connections, node_id_to_label)
                 ivr_flow.append(ivr_node)
         
         # Generate JavaScript output
         js_output = self._generate_javascript_output(ivr_flow)
         
-        print(f"✅ ARCOS-integrated conversion completed! Generated {len(ivr_flow)} nodes")
+        print(f"✅ Flexible conversion completed! Generated {len(ivr_flow)} nodes")
         return ivr_flow, js_output
 
     def _parse_mermaid_enhanced(self, mermaid_code: str) -> Tuple[Dict[str, str], List[Dict]]:
@@ -294,15 +303,19 @@ class ARCOSIntegratedConverter:
         return nodes, connections
 
     def _find_start_node(self, nodes: Dict[str, str], connections: List[Dict]) -> str:
-        """Find the starting node (welcome/greeting)"""
+        """Find the starting node - FLEXIBLE approach"""
         incoming_targets = {conn['target'] for conn in connections}
         start_candidates = [node_id for node_id in nodes if node_id not in incoming_targets]
         
         if start_candidates:
-            # Prefer welcome-like nodes
+            # Look for nodes that seem like starting points
             for node_id in start_candidates:
                 text = nodes[node_id].lower()
-                if any(phrase in text for phrase in ['welcome', 'this is an', 'electric callout']):
+                # More flexible starting point detection
+                if any(indicator in text for indicator in [
+                    'welcome', 'this is', 'hello', 'greeting', 'start', 'begin',
+                    'please enter', 'enter your', 'pin not', 'invalid pin'
+                ]):
                     return node_id
             return start_candidates[0]
         
@@ -317,7 +330,7 @@ class ARCOSIntegratedConverter:
         processed.add(node_id)
         
         # Convert this node
-        ivr_node = self._convert_node_to_ivr(node_id, nodes[node_id], connections, node_id_to_label)
+        ivr_node = self._convert_node_to_ivr_flexible(node_id, nodes[node_id], connections, node_id_to_label)
         ivr_flow.append(ivr_node)
         
         # Process connected nodes
@@ -325,44 +338,76 @@ class ARCOSIntegratedConverter:
         for conn in outgoing_connections:
             self._process_node_recursive(conn['target'], nodes, connections, node_id_to_label, ivr_flow, processed)
 
-    def _generate_production_label(self, node_text: str, node_id: str) -> str:
-        """Generate production-quality labels matching allflows LITE"""
-        text_lower = node_text.lower()
+    def _generate_flexible_label(self, node_text: str, node_id: str) -> str:
+        """FLEXIBLE label generation - works for ANY flow type"""
+        text_lower = node_text.lower().strip()
         
-        # Production labels matching allflows LITE patterns
-        if 'this is an electric callout' in text_lower and 'press 1' in text_lower:
-            return "Live Answer"
-        elif 'enter your' in text_lower and 'pin' in text_lower:
-            return "Enter PIN"
-        elif 'available' in text_lower and 'work this callout' in text_lower:
-            return "Available For Callout"
-        elif 'accepted response' in text_lower:
-            return "Accept"
-        elif 'decline' in text_lower and 'recorded' in text_lower:
-            return "Decline"
-        elif 'not home' in text_lower:
-            return "Not Home"
-        elif 'invalid' in text_lower:
-            return "Invalid Entry"
-        elif 'goodbye' in text_lower:
-            return "Goodbye"
-        elif '30-second' in text_lower or 'press any key' in text_lower:
-            return "Sleep"
-        elif 'qualified' in text_lower:
-            return "Qualified No"
-        elif 'problems' in text_lower:
-            return "Problems"
-        elif 'correct' in text_lower and 'pin' in text_lower:
-            return "Check PIN"
-        elif 'disconnect' in text_lower:
-            return "hangup"
+        # Handle questions/decisions dynamically
+        if '?' in node_text:
+            # Extract the question and make it a label
+            question = node_text.split('?')[0].strip()
+            # Take key words from the question
+            key_words = [word for word in question.split() if len(word) > 2 and word.lower() not in ['the', 'to', 'is', 'was', 'are', 'were']]
+            if key_words:
+                return ' '.join(key_words[:3]).title()
         
-        # Fallback
+        # Dynamic pattern matching for actions
+        action_patterns = [
+            # PIN related
+            (r'enter\s+(?:your\s+)?(?:new\s+)?(?:four\s+digit\s+)?pin', 'Enter PIN'),
+            (r'please\s+enter\s+(?:your\s+)?(?:new\s+)?(?:four\s+digit\s+)?pin', 'Enter PIN'),
+            (r're-enter\s+(?:your\s+)?(?:new\s+)?(?:four\s+digit\s+)?pin', 'Re-enter PIN'),
+            (r'pin\s+(?:cannot\s+be|not)', 'PIN Restriction'),
+            (r'pin\s+(?:has\s+been\s+)?changed', 'PIN Changed'),
+            (r'new\s+pin', 'New PIN'),
+            
+            # Entry and validation
+            (r'invalid\s+entry', 'Invalid Entry'),
+            (r'invalid\s+(\w+)', r'Invalid \1'),
+            (r'entered\s+digits', 'Entered Digits'),
+            (r'valid\s+digits', 'Valid Digits'),
+            
+            # Name related
+            (r'name\s+(?:has\s+been\s+)?confirmation', 'Name Confirmation'),
+            (r'name\s+(?:has\s+been\s+)?recorded', 'Name Recorded'),
+            (r'name\s+(?:has\s+been\s+)?changed', 'Name Changed'),
+            (r'first\s+time\s+users', 'First Time Users'),
+            (r'automated\s+system\s+needs', 'Name Recording'),
+            
+            # General patterns
+            (r'employee\s+information', 'Employee Information'),
+            (r'selection', 'Selection'),
+            (r'match\s+to\s+first\s+entry', 'Match Check'),
+            (r'your\s+(\w+)\s+(?:has\s+been\s+)?(?:successfully\s+)?changed', r'\1 Changed'),
+            (r'please\s+(\w+)', r'\1'),
+            (r'(\w+)\s+successfully', r'\1 Success'),
+        ]
+        
+        for pattern, replacement in action_patterns:
+            match = re.search(pattern, text_lower)
+            if match:
+                if r'\1' in replacement:
+                    return replacement.replace(r'\1', match.group(1).title())
+                else:
+                    return replacement
+        
+        # Extract meaningful words from the beginning
+        words = re.findall(r'\b[A-Za-z]+\b', node_text)
+        meaningful_words = [word for word in words if len(word) > 2 and word.lower() not in ['the', 'your', 'this', 'that', 'please', 'has', 'been', 'will', 'are', 'is']]
+        
+        if meaningful_words:
+            return ' '.join(meaningful_words[:2]).title()
+        
+        # Last resort - first few words
+        first_words = node_text.split()[:2]
+        if first_words:
+            return ' '.join(word.capitalize() for word in first_words)
+        
         return f"Node_{node_id}"
 
-    def _convert_node_to_ivr(self, node_id: str, node_text: str, connections: List[Dict], 
-                            node_id_to_label: Dict[str, str]) -> Dict:
-        """Convert node to production IVR format with ARCOS integration"""
+    def _convert_node_to_ivr_flexible(self, node_id: str, node_text: str, connections: List[Dict], 
+                                     node_id_to_label: Dict[str, str]) -> Dict:
+        """FLEXIBLE node conversion - works for ANY flow type"""
         
         node_connections = [conn for conn in connections if conn['source'] == node_id]
         meaningful_label = node_id_to_label[node_id]
@@ -373,173 +418,191 @@ class ARCOSIntegratedConverter:
             "log": f"{node_text.replace('\n', ' ')[:80]}..."
         }
         
-        # Generate ARCOS-integrated voice prompts
-        play_prompts = self._generate_arcos_prompts(node_text, meaningful_label)
+        # Generate voice prompts
+        play_prompts = self._generate_flexible_prompts(node_text, meaningful_label)
         if play_prompts:
             ivr_node["playPrompt"] = play_prompts
         
-        # Handle node types with ARCOS patterns
-        if self._is_welcome_node(node_text):
-            # Welcome node with CRITICAL FIX for choice "1"
-            ivr_node.update(self._create_arcos_welcome_node(node_text, node_connections, node_id_to_label))
-            
-        elif self._has_input_characteristics(node_text):
-            # PIN entry
-            ivr_node.update(self._create_arcos_pin_node(node_text, node_connections, node_id_to_label))
-            
-        elif self._has_availability_characteristics(node_text):
-            # Availability question
-            ivr_node.update(self._create_arcos_availability_node(node_text, node_connections, node_id_to_label))
-            
+        # FLEXIBLE node type detection
+        node_type = self._detect_node_type_flexible(node_text, node_connections)
+        
+        if node_type == 'decision':
+            # Decision node - needs branches
+            ivr_node.update(self._create_decision_node_flexible(node_text, node_connections, node_id_to_label))
+        
+        elif node_type == 'input':
+            # Input collection node
+            ivr_node.update(self._create_input_node_flexible(node_text, node_connections, node_id_to_label))
+        
+        elif node_type == 'welcome':
+            # Welcome/greeting node
+            ivr_node.update(self._create_welcome_node_flexible(node_text, node_connections, node_id_to_label))
+        
         elif len(node_connections) == 1:
             # Single connection - goto
             target_label = node_id_to_label.get(node_connections[0]['target'], 'hangup')
             ivr_node["goto"] = target_label
-            
+        
         elif len(node_connections) == 0:
             # Terminal node
             ivr_node["goto"] = "hangup"
         
-        # Add ARCOS-style response handling
-        if self._has_response_characteristics(node_text):
+        # Add response handling for specific types
+        if any(word in node_text.lower() for word in ['accept', 'decline', 'recorded', 'successfully']):
             if 'accept' in node_text.lower():
                 ivr_node["gosub"] = ["SaveCallResult", [1001, "Accept"]]
             elif 'decline' in node_text.lower():
                 ivr_node["gosub"] = ["SaveCallResult", [1002, "Decline"]]
-            elif 'qualified' in node_text.lower():
-                ivr_node["gosub"] = ["SaveCallResult", [1145, "QualNo"]]
         
         return ivr_node
 
-    def _is_welcome_node(self, text: str) -> bool:
-        """Check if this is the welcome node"""
-        text_lower = text.lower()
-        return any(phrase in text_lower for phrase in [
-            'this is an electric callout',
-            'press 1, if this is',
-            'press 3, if you need',
-            'press 7, if',
-            'press 9, to repeat'
-        ])
-
-    def _has_input_characteristics(self, text: str) -> bool:
-        return any(phrase in text for phrase in ['enter your', 'pin', 'digit', 'pound key'])
-
-    def _has_availability_characteristics(self, text: str) -> bool:
-        return any(phrase in text for phrase in ['available', 'work this callout', 'if yes, press'])
-
-    def _has_response_characteristics(self, text: str) -> bool:
-        return any(phrase in text for phrase in ['response has been', 'recorded', 'accepted', 'decline'])
-
-    def _create_arcos_welcome_node(self, text: str, connections: List[Dict], node_id_to_label: Dict[str, str]) -> Dict:
-        """Create welcome node with ARCOS patterns and CRITICAL FIX for choice 1"""
+    def _detect_node_type_flexible(self, node_text: str, connections: List[Dict]) -> str:
+        """FLEXIBLE node type detection"""
+        text_lower = node_text.lower()
         
+        # Decision indicators
+        if '?' in node_text or any(word in text_lower for word in ['match', 'valid', 'correct', 'entered digits']):
+            return 'decision'
+        
+        # Input indicators
+        if any(phrase in text_lower for phrase in ['enter your', 'please enter', 're-enter', 'followed by']):
+            return 'input'
+        
+        # Welcome indicators (flexible)
+        if any(phrase in text_lower for phrase in ['welcome', 'this is', 'hello', 'greeting', 'press 1']) and len(connections) > 2:
+            return 'welcome'
+        
+        # Default
+        return 'message'
+
+    def _create_decision_node_flexible(self, text: str, connections: List[Dict], node_id_to_label: Dict[str, str]) -> Dict:
+        """Create decision node - FLEXIBLE approach"""
+        branch_map = {}
+        
+        # Map connections based on labels
+        for conn in connections:
+            label = conn.get('label', '').lower()
+            target_label = node_id_to_label.get(conn['target'], 'hangup')
+            
+            # Flexible branch mapping
+            if 'yes' in label:
+                branch_map['yes'] = target_label
+            elif 'no' in label:
+                branch_map['no'] = target_label
+            elif re.search(r'\b(one|1)\b', label):
+                branch_map['1'] = target_label
+            elif re.search(r'\b(three|3)\b', label):
+                branch_map['3'] = target_label
+            elif 'entered digits' in label:
+                branch_map['input'] = target_label
+            else:
+                # Use the connection label as the branch key
+                clean_label = re.sub(r'[^a-zA-Z0-9]', '_', label)[:10]
+                if clean_label:
+                    branch_map[clean_label] = target_label
+        
+        # Add defaults
+        if not branch_map:
+            branch_map['default'] = 'hangup'
+        
+        return {"branch": branch_map}
+
+    def _create_input_node_flexible(self, text: str, connections: List[Dict], node_id_to_label: Dict[str, str]) -> Dict:
+        """Create input node - FLEXIBLE approach"""
+        text_lower = text.lower()
+        
+        # Determine input type
+        if 'pin' in text_lower:
+            num_digits = 5 if 'pound' in text_lower else 4
+            valid_choices = "{{pin}}"
+        elif 'digit' in text_lower:
+            # Extract number of digits
+            digit_match = re.search(r'(\d+)\s*digit', text_lower)
+            num_digits = int(digit_match.group(1)) if digit_match else 1
+            valid_choices = "0|1|2|3|4|5|6|7|8|9"
+        else:
+            num_digits = 1
+            valid_choices = "1|2|3|4|5|6|7|8|9|0"
+        
+        # Build branch map
+        branch_map = {}
+        for conn in connections:
+            label = conn.get('label', '').lower()
+            target_label = node_id_to_label.get(conn['target'], 'hangup')
+            
+            if 'yes' in label:
+                branch_map[valid_choices] = target_label
+            elif 'no' in label or 'error' in label:
+                branch_map['error'] = target_label
+            elif label:
+                branch_map[label] = target_label
+        
+        # Add defaults
+        if 'error' not in branch_map:
+            branch_map['error'] = 'Invalid Entry'
+        
+        return {
+            "getDigits": {
+                "numDigits": num_digits,
+                "maxTries": 3,
+                "maxTime": 7,
+                "validChoices": valid_choices,
+                "errorPrompt": "callflow:1009"
+            },
+            "branch": branch_map
+        }
+
+    def _create_welcome_node_flexible(self, text: str, connections: List[Dict], node_id_to_label: Dict[str, str]) -> Dict:
+        """Create welcome node - FLEXIBLE approach"""
+        
+        # Extract DTMF choices dynamically
         choices = re.findall(r'press\s+(\d+)', text.lower())
+        if not choices:
+            choices = ['1', '2', '3']  # Default choices
+        
         branch_map = {}
         
         print(f"🔍 Welcome node processing {len(connections)} connections...")
         
-        # CRITICAL FIX: Map connections to choices with enhanced logic
+        # FLEXIBLE connection mapping
         for conn in connections:
             label = conn.get('label', '').lower()
             target_label = node_id_to_label.get(conn['target'], 'hangup')
             
             print(f"🔗 Processing connection: '{label}' -> {target_label}")
             
-            # CRITICAL FIX: "input" connection maps to choice "1" 
-            if label == 'input':
+            # Map based on connection labels
+            if 'input' in label:
                 branch_map['1'] = target_label
-                print(f"✅ CRITICAL FIX: Choice 1 (input) -> {target_label}")
-            elif '1 - this is employee' in label or '1' in label:
+                print(f"✅ Choice 1 (input) -> {target_label}")
+            elif re.search(r'\b1\b', label):
                 branch_map['1'] = target_label
-                print(f"✅ CRITICAL FIX: Choice 1 (explicit) -> {target_label}")
-            elif '3' in label or 'need more time' in label:
+                print(f"✅ Choice 1 -> {target_label}")
+            elif re.search(r'\b3\b', label):
                 branch_map['3'] = target_label
-                print(f"✅ Choice 3 (more time) -> {target_label}")
-            elif '7' in label or 'not home' in label:
+                print(f"✅ Choice 3 -> {target_label}")
+            elif re.search(r'\b7\b', label):
                 branch_map['7'] = target_label
-                print(f"✅ Choice 7 (not home) -> {target_label}")
-            elif '9' in label or 'repeat' in label:
-                branch_map['9'] = "Live Answer"  # Self-reference
-                print(f"✅ Choice 9 (repeat) -> Live Answer")
+                print(f"✅ Choice 7 -> {target_label}")
+            elif re.search(r'\b9\b', label):
+                branch_map['9'] = target_label
+                print(f"✅ Choice 9 -> {target_label}")
             elif 'no input' in label or 'timeout' in label:
                 branch_map['none'] = target_label
-                print(f"✅ No input -> {target_label}")
-            elif 'retry' in label or 'error' in label:
+            elif 'error' in label or 'retry' in label:
                 branch_map['error'] = target_label
-                print(f"✅ Error -> {target_label}")
         
-        # Add ARCOS defaults if missing
+        # Add defaults
         if 'error' not in branch_map:
-            branch_map['error'] = 'Live Answer'
+            branch_map['error'] = 'Problems'
         if 'none' not in branch_map:
-            branch_map['none'] = 'Real Answering Machine'
+            branch_map['none'] = 'Problems'
         
-        print(f"🎯 FINAL welcome branch map: {branch_map}")
-        
-        return {
-            "getDigits": {
-                "numDigits": 1,
-                "maxTime": 1,  # ARCOS pattern
-                "validChoices": "|".join(choices),
-                "errorPrompt": "callflow:1009"  # ARCOS standard
-            },
-            "branch": branch_map
-        }
-
-    def _create_arcos_pin_node(self, text: str, connections: List[Dict], node_id_to_label: Dict[str, str]) -> Dict:
-        """Create PIN entry node with ARCOS patterns"""
-        
-        branch_map = {}
-        for conn in connections:
-            label = conn.get('label', '').lower()
-            target_label = node_id_to_label.get(conn['target'], 'hangup')
-            
-            if 'yes' in label or 'correct' in label:
-                branch_map['{{pin}}'] = target_label  # ARCOS variable pattern
-            elif 'no' in label or 'invalid' in label:
-                branch_map['error'] = target_label
-        
-        if 'error' not in branch_map:
-            branch_map['error'] = 'Invalid Entry'
-        
-        return {
-            "getDigits": {
-                "numDigits": 5,  # 4 digits + pound
-                "maxTries": 3,
-                "maxTime": 7,
-                "validChoices": "{{pin}}",  # ARCOS variable
-                "errorPrompt": "callflow:1009"  # ARCOS standard
-            },
-            "branch": branch_map
-        }
-
-    def _create_arcos_availability_node(self, text: str, connections: List[Dict], node_id_to_label: Dict[str, str]) -> Dict:
-        """Create availability node with ARCOS patterns"""
-        
-        choices = re.findall(r'press\s+(\d+)', text.lower())
-        branch_map = {}
-        
-        for conn in connections:
-            label = conn.get('label', '').lower()
-            target_label = node_id_to_label.get(conn['target'], 'hangup')
-            
-            if '1' in label or 'accept' in label:
-                branch_map['1'] = target_label
-            elif '3' in label or 'decline' in label:
-                branch_map['3'] = target_label
-            elif '9' in label or 'call back' in label:
-                branch_map['9'] = target_label
-        
-        branch_map.update({
-            'error': 'Problems',
-            'none': 'Problems'
-        })
+        print(f"🎯 Welcome branch map: {branch_map}")
         
         return {
             "getDigits": {
                 "numDigits": 1,
-                "maxTries": 3,
                 "maxTime": 7,
                 "validChoices": "|".join(choices),
                 "errorPrompt": "callflow:1009"
@@ -547,63 +610,65 @@ class ARCOSIntegratedConverter:
             "branch": branch_map
         }
 
-    def _generate_arcos_prompts(self, text: str, label: str) -> List[str]:
-        """Generate voice prompts using ARCOS-integrated approach"""
+    def _generate_flexible_prompts(self, text: str, label: str) -> List[str]:
+        """Generate voice prompts - FLEXIBLE approach"""
         
-        # For welcome nodes, use ARCOS segmented pattern like allflows LITE
-        if self._is_welcome_node(text):
+        # For welcome nodes with specific patterns, use segmented approach
+        if any(phrase in text.lower() for phrase in ['this is an', 'electric callout', 'press 1']):
             return [
-                "callflow:1177",           # "This is an" (ARCOS)
-                "company:1202",            # company name (variable)
-                "callflow:1178",           # "electric callout" (ARCOS)
-                "callflow:1231",           # "It is" (ARCOS)
-                "current: dow, date, time", # current date/time (ARCOS variable)
-                "callflow:1002",           # "Press 1 if this is" (ARCOS)
-                "names:{{contact_id}}",    # employee name (ARCOS variable)
-                "callflow:1005",           # "if you need more time" (ARCOS)
-                "names:{{contact_id}}",    # employee name (ARCOS variable)
-                "callflow:1006",           # "to the phone" (ARCOS)
-                "standard:PRS7NEU",        # "Press 7" (ARCOS standard)
-                "callflow:1641",           # "if" (ARCOS)
-                "names:{{contact_id}}",    # employee name (ARCOS variable)
-                "callflow:1004",           # "is not home" (ARCOS)
-                "standard:PRS9NEU",        # "Press 9" (ARCOS standard)
-                "callflow:1643"            # "to repeat this message" (ARCOS)
+                "callflow:1177",           # "This is an"
+                "company:1202",            # company name
+                "callflow:1178",           # "electric callout"
+                "callflow:1231",           # "It is"
+                "current: dow, date, time", # current date/time
+                "callflow:1002",           # "Press 1 if this is"
+                "names:{{contact_id}}",    # employee name
+                "callflow:1005",           # "if you need more time"
+                "names:{{contact_id}}",    # employee name
+                "callflow:1006",           # "to the phone"
+                "standard:PRS7NEU",        # "Press 7"
+                "callflow:1641",           # "if"
+                "names:{{contact_id}}",    # employee name
+                "callflow:1004",           # "is not home"
+                "standard:PRS9NEU",        # "Press 9"
+                "callflow:1643"            # "to repeat this message"
             ]
         
-        # For other nodes, find best ARCOS match
-        best_match = self._find_best_arcos_match(text)
+        # For other nodes, find best match
+        best_match = self._find_best_match_flexible(text)
         if best_match:
             return [f"callflow:{best_match}"]
         
         return ["[VOICE FILE NEEDED]"]
 
-    def _find_best_arcos_match(self, text: str) -> Optional[str]:
-        """Find best matching ARCOS voice file with priority system"""
+    def _find_best_match_flexible(self, text: str) -> Optional[str]:
+        """Find best matching voice file - FLEXIBLE approach"""
         text_lower = text.lower().strip()
         
-        # Try exact transcript match first (prioritizes client overrides)
+        # Try exact match first
         for voice_file in self.voice_files:
             if voice_file.transcript.lower() == text_lower:
                 return voice_file.callflow_id
         
-        # Try keyword matching with priority
-        text_words = set(text_lower.split())
+        # Try partial matching
         best_match = None
         best_score = 0
         
         for voice_file in self.voice_files:
+            # Calculate similarity
+            similarity = SequenceMatcher(None, text_lower, voice_file.transcript.lower()).ratio()
+            
+            # Also check word overlap
+            text_words = set(text_lower.split())
             transcript_words = set(voice_file.transcript.lower().split())
-            common_words = text_words.intersection(transcript_words)
-            if common_words:
-                # Score includes priority boost
-                base_score = len(common_words) / max(len(text_words), len(transcript_words))
-                priority_boost = voice_file.priority / 1000  # Small boost for higher priority
-                score = base_score + priority_boost
-                
-                if score > best_score and base_score > 0.4:  # 40% similarity threshold
-                    best_score = score
-                    best_match = voice_file
+            word_overlap = len(text_words.intersection(transcript_words))
+            
+            # Combined score
+            score = similarity * 0.7 + (word_overlap / max(len(text_words), 1)) * 0.3
+            
+            if score > best_score and score > 0.3:  # Lower threshold for flexibility
+                best_score = score
+                best_match = voice_file
         
         return best_match.callflow_id if best_match else None
 
@@ -637,6 +702,6 @@ class ARCOSIntegratedConverter:
 
 
 def convert_mermaid_to_ivr(mermaid_code: str, cf_general_csv=None, arcos_csv=None) -> Tuple[List[Dict], str]:
-    """Main function for ARCOS-integrated conversion"""
-    converter = ARCOSIntegratedConverter(cf_general_csv, arcos_csv)
+    """Main function for FLEXIBLE ARCOS-integrated conversion"""
+    converter = FlexibleARCOSConverter(cf_general_csv, arcos_csv)
     return converter.convert_mermaid_to_ivr(mermaid_code)
