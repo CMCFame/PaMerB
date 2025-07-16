@@ -437,29 +437,45 @@ class ARCOSIntegratedConverter:
         choices = re.findall(r'press\s+(\d+)', text.lower())
         branch_map = {}
         
-        # CRITICAL FIX: Map connections to choices
+        print(f"🔍 Welcome node processing {len(connections)} connections...")
+        
+        # CRITICAL FIX: Map connections to choices with enhanced logic
         for conn in connections:
             label = conn.get('label', '').lower()
             target_label = node_id_to_label.get(conn['target'], 'hangup')
             
-            # FIXED: "input" connection maps to choice "1" 
-            if label == 'input' or '1 - this is employee' in label:
+            print(f"🔗 Processing connection: '{label}' -> {target_label}")
+            
+            # CRITICAL FIX: "input" connection maps to choice "1" 
+            if label == 'input':
                 branch_map['1'] = target_label
-                print(f"✅ CRITICAL FIX: Choice 1 -> {target_label}")
+                print(f"✅ CRITICAL FIX: Choice 1 (input) -> {target_label}")
+            elif '1 - this is employee' in label or '1' in label:
+                branch_map['1'] = target_label
+                print(f"✅ CRITICAL FIX: Choice 1 (explicit) -> {target_label}")
             elif '3' in label or 'need more time' in label:
                 branch_map['3'] = target_label
+                print(f"✅ Choice 3 (more time) -> {target_label}")
             elif '7' in label or 'not home' in label:
                 branch_map['7'] = target_label
+                print(f"✅ Choice 7 (not home) -> {target_label}")
             elif '9' in label or 'repeat' in label:
                 branch_map['9'] = "Live Answer"  # Self-reference
-            elif 'no input' in label:
+                print(f"✅ Choice 9 (repeat) -> Live Answer")
+            elif 'no input' in label or 'timeout' in label:
                 branch_map['none'] = target_label
+                print(f"✅ No input -> {target_label}")
+            elif 'retry' in label or 'error' in label:
+                branch_map['error'] = target_label
+                print(f"✅ Error -> {target_label}")
         
-        # Add ARCOS defaults
+        # Add ARCOS defaults if missing
         if 'error' not in branch_map:
             branch_map['error'] = 'Live Answer'
         if 'none' not in branch_map:
-            branch_map['none'] = 'Real Answering Machine'  # ARCOS pattern
+            branch_map['none'] = 'Real Answering Machine'
+        
+        print(f"🎯 FINAL welcome branch map: {branch_map}")
         
         return {
             "getDigits": {
