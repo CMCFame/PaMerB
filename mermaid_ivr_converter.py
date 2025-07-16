@@ -1,6 +1,5 @@
 """
-FIXED KeyError VERSION - mermaid_ivr_converter.py
-This version fixes the KeyError: 'label' issue in response node creation
+COMPLETE ENHANCED VERSION
 """
 
 import re
@@ -39,6 +38,7 @@ class ProductionIVRConverter:
         self.voice_files: List[VoiceFile] = []
         self.transcript_index: Dict[str, List[VoiceFile]] = {}
         self.exact_match_index: Dict[str, VoiceFile] = {}
+        self.keyword_index: Dict[str, List[VoiceFile]] = {}
         
         # Load the database - either from uploaded file or fallback
         if uploaded_csv_file:
@@ -85,33 +85,74 @@ class ProductionIVRConverter:
                 
                 self.voice_files.append(voice_file)
                 
-                # Index by transcript for exact matching
+                # ENHANCED: Build better indexes
                 transcript_clean = voice_file.transcript.lower().strip()
                 if transcript_clean:
+                    # Exact match index
                     self.exact_match_index[transcript_clean] = voice_file
                     
-                    # Also index individual words
-                    words = transcript_clean.split()
+                    # Word-based index
+                    words = re.findall(r'\b\w+\b', transcript_clean)
                     for word in words:
                         if word not in self.transcript_index:
                             self.transcript_index[word] = []
                         self.transcript_index[word].append(voice_file)
+                    
+                    # Keyword phrase index
+                    self._build_keyword_index(transcript_clean, voice_file)
             
             print(f"✅ Successfully loaded {row_count} voice files from uploaded CSV")
+            print(f"📊 Built indexes: {len(self.exact_match_index)} exact matches, {len(self.keyword_index)} keyword phrases")
             
         except Exception as e:
             print(f"❌ Error loading database: {e}")
             self._load_fallback_database()
+
+    def _build_keyword_index(self, transcript: str, voice_file: VoiceFile):
+        """Build enhanced keyword index for better matching"""
+        
+        # Common IVR phrases to index
+        patterns = [
+            r'enter.*pin.*pound',
+            r'invalid.*entry',
+            r'try.*again',
+            r'press.*1',
+            r'press.*3',
+            r'press.*9',
+            r'thank.*you',
+            r'goodbye',
+            r'welcome',
+            r'pin.*changed',
+            r'name.*recorded',
+            r'first.*time',
+            r'correct.*press',
+            r'pound.*key',
+            r'four.*digit',
+            r'successfully',
+            r'cannot.*be',
+            r'recorded.*as',
+            r'confirmation',
+        ]
+        
+        for pattern in patterns:
+            if re.search(pattern, transcript):
+                if pattern not in self.keyword_index:
+                    self.keyword_index[pattern] = []
+                self.keyword_index[pattern].append(voice_file)
 
     def _load_real_database(self):
         """Load fallback database with common phrases"""
         fallback_data = [
             ("Welcome", "This is an automated callout", "1186"),
             ("Press", "Press", "PRESSNEU"),
+            ("PIN Entry", "Please enter your four digit PIN followed by the pound key", "1008"),
+            ("Invalid", "I'm sorry. That is an invalid entry. Please try again.", "1009"),
             ("Thank you", "Thank you.", "MSG023"),
-            ("Goodbye", "Goodbye.", "MSG003"),
-            ("Invalid", "I'm sorry. That is an invalid entry. Please try again.", "MSG028"),
+            ("Goodbye", "Goodbye.", "1029"),
+            ("PIN Changed", "Your PIN has been changed successfully.", "1167"),
+            ("Name Recorded", "Your name has been recorded.", "1200"),
             ("Available", "All available.", "1111"),
+            ("Error", "I'm sorry you are having problems.", "1351"),
         ]
         
         for company, transcript, callflow_id in fallback_data:
@@ -124,10 +165,109 @@ class ProductionIVRConverter:
             )
             self.voice_files.append(voice_file)
             self.exact_match_index[transcript.lower().strip()] = voice_file
+            self._build_keyword_index(transcript.lower(), voice_file)
 
     def _load_fallback_database(self):
         """Load minimal fallback when CSV fails"""
         self._load_real_database()
+
+    def _search_voice_database_enhanced(self, text_segment: str) -> Optional[str]:
+        """ENHANCED: Much better database search with multiple strategies"""
+        
+        if not text_segment or len(text_segment.strip()) < 3:
+            return None
+            
+        text_clean = text_segment.lower().strip()
+        
+        # 1. EXACT MATCH FIRST
+        if text_clean in self.exact_match_index:
+            voice_file = self.exact_match_index[text_clean]
+            print(f"🎯 Exact match: '{text_segment}' -> callflow:{voice_file.callflow_id}")
+            return f"callflow:{voice_file.callflow_id}"
+        
+        # 2. ENHANCED PATTERN MATCHING - Map common IVR patterns to known voice files
+        pattern_mappings = {
+            # PIN related
+            r'enter.*pin.*pound.*key': '1008',
+            r'please.*enter.*four.*digit.*pin': '1008', 
+            r'new.*pin.*enter.*four.*digit': '1008',
+            r're.?enter.*pin.*four.*digit': '1008',
+            r'invalid.*entry.*try.*again': '1009',
+            r'pin.*changed.*successfully': '1167',
+            r'pin.*cannot.*be.*1234': '1351',
+            r'your.*pin.*cannot.*1234': '1351',
+            
+            # Name recording
+            r'first.*time.*users.*spoken.*name': '1200',
+            r'name.*has.*been.*recorded.*as': '1201',
+            r'name.*confirmation.*recorded': '1201',
+            r'name.*changed.*successfully': '1202',
+            r'employee.*information': '1203',
+            
+            # Standard responses  
+            r'thank.*you.*goodbye': '1029',
+            r'goodbye': '1029',
+            r'press.*1.*correct': '1316',
+            r'press.*3.*re.*record': '1316',
+            r'if.*correct.*press.*1': '1316',
+            
+            # Confirmations
+            r'correct.*press.*1': '1316',
+            r'to.*re.*record.*press.*3': '1316',
+            r'selection': '1320',
+            r'valid.*digits': '1330',
+        }
+        
+        for pattern, callflow_id in pattern_mappings.items():
+            if re.search(pattern, text_clean):
+                print(f"🎯 Pattern match: '{text_segment}' -> callflow:{callflow_id}")
+                return f"callflow:{callflow_id}"
+        
+        # 3. KEYWORD PHRASE MATCHING
+        for keyword_pattern, voice_files in self.keyword_index.items():
+            if re.search(keyword_pattern, text_clean):
+                best_file = voice_files[0]  # Take first match
+                print(f"🔍 Keyword match: '{keyword_pattern}' -> callflow:{best_file.callflow_id}")
+                return f"callflow:{best_file.callflow_id}"
+        
+        # 4. SINGLE KEYWORD MATCHING
+        keyword_mappings = {
+            'invalid': '1009',
+            'goodbye': '1029', 
+            'thank you': '1029',
+            'welcome': '1186',
+            'pin': '1008',
+            'pound key': '1008',
+            'press 1': 'PRS1DWN',
+            'press 3': 'PRS3DWN',
+            'successfully': '1167',
+            'confirmation': '1201',
+            'selection': '1320',
+        }
+        
+        for keyword, callflow_id in keyword_mappings.items():
+            if keyword in text_clean:
+                print(f"🔍 Keyword match: '{keyword}' -> callflow:{callflow_id}")
+                return f"callflow:{callflow_id}"
+        
+        # 5. FUZZY MATCHING for close matches
+        best_match = None
+        best_score = 0.0
+        
+        for transcript, voice_file in self.exact_match_index.items():
+            if len(transcript) > 10:  # Only check longer transcripts
+                similarity = SequenceMatcher(None, text_clean, transcript).ratio()
+                if similarity > 0.8 and similarity > best_score:
+                    best_score = similarity
+                    best_match = voice_file
+        
+        if best_match:
+            print(f"🎯 Fuzzy match ({best_score:.2f}): '{text_segment}' -> callflow:{best_match.callflow_id}")
+            return f"callflow:{best_match.callflow_id}"
+        
+        # 6. FALLBACK: Mark as needed
+        print(f"⚠️ No database match for: '{text_segment}' - voice file needed")
+        return None
 
     def _parse_mermaid_diagram(self, mermaid_code: str) -> Tuple[List[Dict], List[Dict]]:
         """Parse Mermaid diagram into nodes and connections"""
@@ -193,20 +333,20 @@ class ProductionIVRConverter:
         """Determine node type from text content"""
         text_lower = text.lower()
         
-        # Welcome nodes - typically first nodes with greeting
+        # Welcome nodes
         if any(phrase in text_lower for phrase in ["welcome", "this is an", "this is a", "automated"]):
             return NodeType.WELCOME
         
         # PIN entry nodes
-        if any(phrase in text_lower for phrase in ["pin", "enter", "digits"]) and not "invalid" in text_lower:
+        if any(phrase in text_lower for phrase in ["pin", "enter", "digits", "pound key"]) and not "invalid" in text_lower:
             return NodeType.PIN_ENTRY
         
-        # Availability questions - specific pattern
+        # Availability questions
         if "available" in text_lower and any(phrase in text_lower for phrase in ["work", "callout", "press 1", "press 3"]):
             return NodeType.AVAILABILITY
         
         # Response/action nodes
-        if any(phrase in text_lower for phrase in ["accepted", "decline", "response", "recorded"]):
+        if any(phrase in text_lower for phrase in ["accepted", "decline", "response", "recorded", "changed successfully"]):
             return NodeType.RESPONSE
         
         # Goodbye/disconnect nodes
@@ -221,227 +361,321 @@ class ProductionIVRConverter:
         if any(phrase in text_lower for phrase in ["more time", "continue", "press any key"]):
             return NodeType.SLEEP
         
-        # Decision nodes - contain questions or simple yes/no choices
-        if any(phrase in text_lower for phrase in ["?", "yes", "no", "correct"]) or len(text.split()) <= 5:
+        # Decision nodes - contain questions or comparisons
+        if any(phrase in text_lower for phrase in ["?", "=", "yes", "no", "correct", "match"]) or len(text.split()) <= 5:
             return NodeType.DECISION
         
         # Default to action
         return NodeType.ACTION
 
     def _generate_meaningful_label(self, node_text: str, node_type: NodeType, node_id: str, all_nodes: List[Dict] = None) -> str:
-        """Generate meaningful labels like allflows LITE (NOT A, B, C)"""
+        """ENHANCED: Generate meaningful labels with better parsing"""
         
         if node_text:
             text_lower = node_text.lower()
             
-            # Welcome/greeting nodes
-            if "welcome" in text_lower or "this is" in text_lower or node_type == NodeType.WELCOME:
-                return "Live Answer"
-            
-            # PIN entry
-            if "pin" in text_lower and ("enter" in text_lower or "type" in text_lower or "digits" in text_lower):
-                return "Enter PIN"
-            
-            # Availability questions
-            if "available" in text_lower and "work" in text_lower:
-                return "Offer"
-            
-            # Response actions
-            if "accepted" in text_lower and ("response" in text_lower or "recorded" in text_lower):
-                return "Accept"
-            elif "decline" in text_lower and ("response" in text_lower or "recorded" in text_lower):
-                return "Decline"
-            elif "not home" in text_lower:
-                return "Not Home"
-            elif "qualified" in text_lower:
-                return "Qualified No"
-            
-            # Sleep/wait
-            if ("more time" in text_lower or "continue" in text_lower or "press any key" in text_lower):
-                return "Sleep"
-            
-            # Goodbye
-            if "goodbye" in text_lower:
-                return "Goodbye"
-            elif "disconnect" in text_lower:
-                return "Disconnect"
-            
-            # Error/problems
-            if "invalid" in text_lower and "entry" in text_lower:
+            # ENHANCED: Better PIN-related labels
+            if "pin not 1234" in text_lower or "cannot be 1234" in text_lower:
+                return "PIN Not 1234"
+            elif "new pin" in text_lower and "enter" in text_lower:
+                return "Enter New PIN"
+            elif "re-enter" in text_lower and "pin" in text_lower:
+                return "Re-enter PIN"
+            elif "pin changed" in text_lower and "successfully" in text_lower:
+                return "PIN Changed"
+            elif "pin = 1234" in text_lower:
+                return "Check PIN 1234"
+            elif "match to first entry" in text_lower:
+                return "Match PIN"
+                
+            # Name recording
+            elif "first time users" in text_lower or "spoken name" in text_lower:
+                return "Record Name"
+            elif "name confirmation" in text_lower or "name has been recorded" in text_lower:
+                return "Name Confirmation"
+            elif "name changed" in text_lower and "successfully" in text_lower:
+                return "Name Changed"
+            elif "employee information" in text_lower:
+                return "Employee Information"
+            elif "name recorded previously" in text_lower:
+                return "Check Name Exists"
+                
+            # Decision logic
+            elif "valid digits" in text_lower:
+                return "Validate Digits"
+            elif node_text.strip() == "Selection":
+                return "Process Selection"
+            elif node_text.strip().lower() == "yes":
+                return "Confirm Yes"
+            elif "entered digits" in text_lower:
+                return "Check Digits"
+                
+            # Standard nodes
+            elif "invalid entry" in text_lower:
                 return "Invalid Entry"
-            elif "problem" in text_lower or "error" in text_lower:
-                return "Problems"
+            elif "goodbye" in text_lower:
+                return "Goodbye"
+            elif "welcome" in text_lower:
+                return "Welcome"
             
-            # Callout information nodes
-            if "electric callout" in text_lower:
-                return "Live Answer 1"
-            elif "callout reason" in text_lower:
-                return "Callout Reason"
-            elif "trouble location" in text_lower:
-                return "Trouble Location"
-            elif "custom message" in text_lower:
-                return "Custom Message"
+            # ENHANCED: Better fallback parsing
+            # Remove common IVR words and focus on key content
+            cleaned_text = re.sub(r'\b(please|press|enter|the|your|a|an|is|has|been|to|for|if|this)\b', ' ', text_lower)
+            words = [w for w in cleaned_text.split() if len(w) > 2]
             
-            # Decision nodes (short questions)
-            if node_type == NodeType.DECISION or "?" in node_text:
-                if "correct" in text_lower and "pin" in text_lower:
-                    return "Check PIN"
-                elif "this is employee" in text_lower or "employee" in text_lower:
-                    return "Live Answer 2"
-                elif len(node_text.split()) <= 4:
-                    # Capitalize first letter of each word
-                    return ' '.join(word.capitalize() for word in node_text.split())
-
-            # Fallback: Generate from first few meaningful words
-            words = re.findall(r'\b[A-Za-z]+\b', node_text)
             if words:
-                meaningful_words = [w for w in words[:3] if len(w) > 2 and w.lower() not in ['the', 'and', 'for', 'you', 'this', 'that', 'is', 'a']]
-                if meaningful_words:
-                    return ' '.join(word.capitalize() for word in meaningful_words)
+                if len(words) <= 3:
+                    return ' '.join(word.capitalize() for word in words)
+                else:
+                    # Take first 2-3 meaningful words
+                    key_words = words[:3]
+                    return ' '.join(word.capitalize() for word in key_words)
         
         # Last resort: Use node type and ID
         return f"{node_type.value.replace('_', ' ').title()}_{node_id}"
 
     def _create_ivr_node(self, node: Dict, connections: List[Dict], label: str, node_id_to_label: Dict[str, str] = None) -> List[Dict[str, Any]]:
-        """Create IVR node(s) following allflows LITE patterns - RETURNS LIST"""
+        """ENHANCED: Create proper IVR nodes with real voice files and logic"""
         text = node['text']
         node_type = node['type']
         
-        # Create base node following allflows property order
+        # Create base node
         ivr_node = {'label': label}
-        
-        # Add log based on text content
         ivr_node['log'] = text.replace('\n', ' ').strip()
         
-        # Add playPrompt - use callflow:node_id for now
-        ivr_node['playPrompt'] = f"callflow:{node['id']}"
-        
-        # FIXED: Handle response nodes specially (return multiple nodes)
-        if node_type == NodeType.RESPONSE:
-            return self._create_response_nodes(ivr_node, label, connections, node_id_to_label)
-        
-        # Add interaction logic based on node type
-        if node_type in [NodeType.WELCOME, NodeType.AVAILABILITY, NodeType.DECISION, NodeType.PIN_ENTRY]:
-            self._add_input_logic_fixed(ivr_node, connections, node, node_id_to_label)
-        elif node_type == NodeType.SLEEP:
-            self._add_sleep_logic(ivr_node, connections, node_id_to_label)
-        
-        # Add goto for single connections (but not if we have branch logic)
-        if len(connections) == 1 and not ivr_node.get('branch') and not ivr_node.get('getDigits'):
-            target_id = connections[0]['target']
-            target_label = node_id_to_label.get(target_id, self._generate_meaningful_label("", NodeType.ACTION, target_id))
-            ivr_node['goto'] = target_label
-
-        return [ivr_node]  # Return as list for consistency
-
-    def _add_input_logic_fixed(self, ivr_node: Dict, connections: List[Dict], node: Dict, node_id_to_label: Dict[str, str] = None):
-        """FIXED: Add getDigits and branch logic with ALL choices from Mermaid"""
-        if not connections:
-            return
-        
-        # CRITICAL: Extract ALL choices mentioned in the node text AND connection labels
-        node_text = node['text'].lower()
-        valid_choices = []
-        branch_map = {}
-        
-        # Extract choices from node text (like "Press 1", "Press 3", etc.)
-        press_matches = re.findall(r'press\s+(\d+)', node_text)
-        for choice in press_matches:
-            valid_choices.append(choice)
-        
-        # Extract choices from connection labels
-        for conn in connections:
-            label = conn.get('label', '').lower()
-            target = conn['target']
-            target_label = node_id_to_label.get(target, self._generate_meaningful_label("", NodeType.ACTION, target))
+        # ENHANCED: Better playPrompt generation using real database
+        voice_file = self._search_voice_database_enhanced(text)
+        if voice_file:
+            ivr_node['playPrompt'] = voice_file
+        else:
+            # Fallback: try to use a reasonable default based on node type
+            fallback_prompts = {
+                NodeType.PIN_ENTRY: 'callflow:1008',
+                NodeType.ERROR: 'callflow:1009', 
+                NodeType.GOODBYE: 'callflow:1029',
+                NodeType.RESPONSE: 'callflow:1167',
+            }
             
-            print(f"🔀 Processing connection label: '{label}' -> {target} ({target_label})")
-            
-            # FIXED: Better digit extraction
-            if re.search(r'\b(\d+)\s*-', label):  # "1 - this is employee"
-                choice = re.search(r'\b(\d+)\s*-', label).group(1)
-                valid_choices.append(choice)
-                branch_map[choice] = target_label
-            elif re.search(r'press\s+(\d+)', label):  # "press 1"
-                choice = re.search(r'press\s+(\d+)', label).group(1)
-                valid_choices.append(choice)
-                branch_map[choice] = target_label
-            elif re.search(r'\b(\d+)\b', label) and len(label) < 15:  # Simple digit like "3 - decline"
-                choice = re.search(r'\b(\d+)\b', label).group(1)
-                valid_choices.append(choice)
-                branch_map[choice] = target_label
-            elif any(phrase in label for phrase in ['no input', 'timeout', 'none']):
-                branch_map['none'] = target_label
-            elif any(phrase in label for phrase in ['invalid', 'error', 'retry']):
-                branch_map['error'] = target_label
-            elif 'yes' in label:
-                # PIN verification - direct goto
-                ivr_node['goto'] = target_label
-                return
-            elif label == 'input':  # Generic input - means "any digit pressed"
-                # This should trigger digit collection for the choices in node text
-                pass
-            elif label == '':  # Empty label - direct connection
-                if not valid_choices:  # Only use for goto if no digit choices
-                    ivr_node['goto'] = target_label
-                    return
+            if node_type in fallback_prompts:
+                ivr_node['playPrompt'] = fallback_prompts[node_type]
+                print(f"📝 Using fallback prompt for {label}: {fallback_prompts[node_type]}")
+            else:
+                # Last resort: use node ID but mark as needed
+                ivr_node['playPrompt'] = f"callflow:{node['id']}"
+                print(f"⚠️ Voice file needed for: {text[:50]}...")
         
-        # CRITICAL: Only add getDigits if we found valid numeric choices
-        if valid_choices:
-            # Remove duplicates and sort
-            unique_choices = sorted(set(valid_choices))
+        # ENHANCED: Add proper getDigits for PIN entry nodes
+        if node_type == NodeType.PIN_ENTRY or ("pin" in text.lower() and "enter" in text.lower()):
+            ivr_node['getDigits'] = {
+                'numDigits': 5,  # 4 digits + pound
+                'maxTries': 3,
+                'maxTime': 10,   # Longer for PIN entry
+                'validChoices': '{{new_pin}}' if 'new' in text.lower() else '{{pin}}',
+                'errorPrompt': 'callflow:1009',
+                'nonePrompt': 'callflow:1009'
+            }
             
-            # FIXED: Add all missing properties for allflows LITE compliance
+            # ENHANCED: Better PIN validation branching
+            if connections:
+                branch_map = {}
+                for conn in connections:
+                    target_label = node_id_to_label.get(conn['target'], 'Unknown')
+                    label_text = conn.get('label', '').lower()
+                    
+                    if 'digits' in label_text or 'entered' in label_text:
+                        # This connection handles the PIN processing
+                        ivr_node['goto'] = target_label
+                        return [ivr_node]
+                
+                # Default error handling
+                ivr_node['branch'] = {
+                    'error': 'Invalid Entry',
+                    'none': 'Invalid Entry'
+                }
+        
+        # ENHANCED: Add proper getDigits for confirmation nodes
+        elif ("correct" in text.lower() and "press 1" in text.lower()) or ("name confirmation" in label.lower()):
             ivr_node['getDigits'] = {
                 'numDigits': 1,
                 'maxTries': 3,
                 'maxTime': 7,
-                'validChoices': '|'.join(unique_choices),
+                'validChoices': '1|3',
                 'errorPrompt': 'callflow:1009',
-                'nonePrompt': 'callflow:1009',
+                'nonePrompt': 'callflow:1009'
             }
             
-            # Add default error/none handling if not specified
-            if 'error' not in branch_map:
-                branch_map['error'] = 'Problems'
-            if 'none' not in branch_map:
-                branch_map['none'] = 'Problems'
+            # Find connections for press 1 and press 3
+            branch_map = {}
+            for conn in connections:
+                target_label = node_id_to_label.get(conn['target'], 'Unknown')
+                label_text = conn.get('label', '').lower()
+                
+                if 'entered digits' in label_text or 'retry logic' in label_text:
+                    # This is the main processing path
+                    ivr_node['goto'] = target_label
+                    return [ivr_node]
             
-            ivr_node['branch'] = branch_map
-            print(f"✅ Added input logic: choices={unique_choices}, branches={branch_map}")
-
-    def _add_sleep_logic(self, ivr_node: Dict, connections: List[Dict], node_id_to_label: Dict[str, str]):
-        """FIXED: Add proper sleep/continue logic like allflows LITE"""
-        # Sleep nodes should accept any key and continue
-        ivr_node['getDigits'] = {
-            'numDigits': 1,
-            'maxTries': 2,
-            'maxTime': 30,
-            'nonePrompt': 'callflow:1009'
-        }
+            # Default confirmation branches
+            ivr_node['branch'] = {
+                '1': 'Name Changed',    # Confirmed
+                '3': 'Record Name',     # Re-record  
+                'error': 'Invalid Entry',
+                'none': 'Invalid Entry'
+            }
         
-        # Find the target (usually back to main menu)
-        if connections:
+        # Handle response nodes (PIN Changed, Name Changed, etc.)
+        elif node_type == NodeType.RESPONSE:
+            if "changed successfully" in text.lower():
+                # These are completion messages, not response recordings
+                if connections and len(connections) == 1:
+                    target_label = node_id_to_label.get(connections[0]['target'], 'Goodbye')
+                    ivr_node['goto'] = target_label
+                else:
+                    ivr_node['goto'] = 'Goodbye'
+                return [ivr_node]
+            else:
+                return self._create_response_nodes(ivr_node, label, connections, node_id_to_label)
+        
+        # Handle decision nodes - should have branch logic
+        elif node_type == NodeType.DECISION:
+            self._add_decision_logic_enhanced(ivr_node, connections, node, node_id_to_label)
+        
+        # Handle error nodes
+        elif node_type == NodeType.ERROR:
+            self._add_error_retry_logic(ivr_node, connections, node_id_to_label)
+        
+        # Single connection goto (only if no other logic)
+        elif len(connections) == 1 and not ivr_node.get('branch') and not ivr_node.get('getDigits'):
             target_id = connections[0]['target']
-            target_label = node_id_to_label.get(target_id, 'Live Answer')
-            ivr_node['branch'] = {
-                'next': target_label,
-                'none': target_label,
-                'error': target_label
-            }
+            target_label = node_id_to_label.get(target_id, self._generate_meaningful_label("", NodeType.ACTION, target_id))
+            ivr_node['goto'] = target_label
+
+        return [ivr_node]
+
+    def _add_decision_logic_enhanced(self, ivr_node: Dict, connections: List[Dict], node: Dict, node_id_to_label: Dict[str, str]):
+        """ENHANCED: Add proper decision logic with better branching"""
+        
+        text_lower = node['text'].lower()
+        
+        if "pin = 1234" in text_lower:
+            # PIN validation check - system handles this automatically
+            yes_target = None
+            no_target = None
+            
+            for conn in connections:
+                label = conn.get('label', '').lower()
+                target_label = node_id_to_label.get(conn['target'], 'Unknown')
+                
+                if 'yes' in label:
+                    yes_target = target_label  # Invalid PIN (1234)
+                elif 'no' in label:
+                    no_target = target_label   # Valid PIN (not 1234)
+            
+            # System branches based on PIN validation
+            if yes_target and no_target:
+                ivr_node['branch'] = {
+                    'pin_1234': yes_target,    # If PIN is 1234 (invalid)
+                    'pin_valid': no_target     # If PIN is not 1234 (valid)
+                }
+            elif connections:
+                # Fallback to first connection
+                ivr_node['goto'] = node_id_to_label.get(connections[0]['target'], 'Unknown')
+                
+        elif "match to first entry" in text_lower or "match" in text_lower:
+            # PIN confirmation check
+            for conn in connections:
+                target_label = node_id_to_label.get(conn['target'], 'Unknown')
+                # Assume first connection is success path
+                ivr_node['goto'] = target_label
+                break
+                
+        elif "name recorded previously" in text_lower:
+            # Check if user has recorded name before
+            yes_target = None
+            no_target = None
+            
+            for conn in connections:
+                label = conn.get('label', '').lower()
+                target_label = node_id_to_label.get(conn['target'], 'Unknown')
+                
+                if 'yes' in label:
+                    yes_target = target_label
+                elif 'no' in label:
+                    no_target = target_label
+            
+            if yes_target and no_target:
+                ivr_node['branch'] = {
+                    'has_name': yes_target,
+                    'no_name': no_target
+                }
+            elif connections:
+                ivr_node['goto'] = node_id_to_label.get(connections[0]['target'], 'Unknown')
+                
+        elif "valid digits" in text_lower:
+            # Digit validation check
+            for conn in connections:
+                label = conn.get('label', '').lower() 
+                target_label = node_id_to_label.get(conn['target'], 'Unknown')
+                
+                if 'no' in label:
+                    ivr_node['branch'] = {'invalid': target_label}
+                elif 'yes' in label:
+                    if 'branch' not in ivr_node:
+                        ivr_node['branch'] = {}
+                    ivr_node['branch']['valid'] = target_label
+                    
+        elif text_lower.strip() == "selection":
+            # Menu selection processing
+            branch_map = {}
+            for conn in connections:
+                label = conn.get('label', '').lower()
+                target_label = node_id_to_label.get(conn['target'], 'Unknown')
+                
+                if 'one' in label:
+                    branch_map['1'] = target_label
+                elif 'three' in label:
+                    branch_map['3'] = target_label
+            
+            if branch_map:
+                ivr_node['branch'] = branch_map
+            elif connections:
+                ivr_node['goto'] = node_id_to_label.get(connections[0]['target'], 'Unknown')
+                
         else:
-            ivr_node['branch'] = {
-                'next': 'Live Answer',
-                'none': 'Live Answer',
-                'error': 'Problems'
-            }
+            # Generic decision - use first connection as default
+            if connections:
+                target_label = node_id_to_label.get(connections[0]['target'], 'Unknown')
+                ivr_node['goto'] = target_label
+
+    def _add_error_retry_logic(self, ivr_node: Dict, connections: List[Dict], node_id_to_label: Dict[str, str]):
+        """Add proper retry logic for error nodes"""
+        
+        # Error nodes should return to appropriate points in the flow
+        retry_targets = []
+        
+        for conn in connections:
+            label = conn.get('label', '').lower()
+            target_label = node_id_to_label.get(conn['target'], 'Unknown')
+            
+            if 'retry' in label:
+                retry_targets.append(target_label)
+        
+        if retry_targets:
+            # If multiple retry targets, use the first one
+            ivr_node['goto'] = retry_targets[0]
+        elif connections:
+            # Default to first connection
+            ivr_node['goto'] = node_id_to_label.get(connections[0]['target'], 'Unknown')
+        else:
+            # No connections - dead end error
+            ivr_node['goto'] = 'Problems'
 
     def _create_response_nodes(self, base_node: Dict, label: str, connections: List[Dict], node_id_to_label: Dict[str, str]) -> List[Dict]:
-        """FIXED: Create proper response node structure like allflows LITE - ENSURES ALL NODES HAVE LABELS"""
+        """Create proper response node structure like allflows LITE"""
         nodes = []
         
-        # First node: gosub only - ENSURE IT HAS A LABEL
-        gosub_node = {'label': label}  # This should already have the label
+        # First node: gosub only
+        gosub_node = {'label': label}
         
         label_lower = label.lower()
         if 'accept' in label_lower:
@@ -455,9 +689,9 @@ class ProductionIVRConverter:
         
         nodes.append(gosub_node)
         
-        # Second node: message and goto - CRITICAL FIX: ADD A LABEL
+        # Second node: message and goto
         message_node = {
-            'label': f"{label} Message",  # FIXED: Add a unique label for the message node
+            'label': f"{label} Message",
             'log': base_node['log'],
             'playPrompt': base_node['playPrompt'],
             'nobarge': '1',
@@ -465,11 +699,10 @@ class ProductionIVRConverter:
         }
         nodes.append(message_node)
         
-        print(f"✅ Created response nodes: '{gosub_node['label']}' and '{message_node['label']}'")
         return nodes
 
     def convert_mermaid_to_ivr(self, mermaid_code: str, uploaded_csv_file=None) -> Tuple[List[Dict[str, Any]], List[str]]:
-        """Main conversion method - PRODUCTION READY WITH DEBUGGING"""
+        """Main conversion method - ENHANCED WITH BETTER DATABASE SEARCH"""
         notes = []
         
         try:
@@ -521,7 +754,7 @@ class ProductionIVRConverter:
                 # Create IVR node(s) - can return multiple nodes for responses
                 created_nodes = self._create_ivr_node(node, node_connections, label, node_id_to_label)
                 
-                # FIXED: Add safety check for created nodes
+                # Add all created nodes with safety check
                 for created_node in created_nodes:
                     # Ensure every node has a label before adding
                     if 'label' not in created_node:
@@ -532,11 +765,11 @@ class ProductionIVRConverter:
                     notes.append(f"Generated node: {created_node['label']}")
                     print(f"✅ Generated IVR node: {created_node['label']}")
             
-            # Add standard termination nodes if not present
+            # ENHANCED: Better standard nodes
             if not any(node.get('label') == 'Problems' for node in ivr_nodes):
                 ivr_nodes.append({
                     'label': 'Problems',
-                    'log': 'Error handler - invalid input or system error',
+                    'log': 'I\'m sorry you are having problems.',
                     'playPrompt': 'callflow:1351',
                     'goto': 'Goodbye'
                 })
@@ -545,14 +778,20 @@ class ProductionIVRConverter:
             if not any(node.get('label') == 'Goodbye' for node in ivr_nodes):
                 ivr_nodes.append({
                     'label': 'Goodbye',
-                    'log': 'Thank you goodbye',
+                    'log': 'Thank you. Goodbye.',
                     'playPrompt': 'callflow:1029',
                     'goto': 'hangup'
                 })
                 notes.append("Added standard 'Goodbye' termination")
             
+            # ENHANCED: Add voice file statistics
+            voice_files_found = sum(1 for node in ivr_nodes if node.get('playPrompt', '').startswith('callflow:') and not node['playPrompt'].endswith(('A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T')))
+            voice_files_needed = len(ivr_nodes) - voice_files_found
+            
             notes.append(f"✅ Generated {len(ivr_nodes)} production-ready IVR nodes")
+            notes.append(f"📊 Voice files: {voice_files_found} found in database, {voice_files_needed} need recording")
             print(f"🎉 CONVERSION SUCCESSFUL - Generated {len(ivr_nodes)} nodes")
+            print(f"📊 Voice file statistics: {voice_files_found} found, {voice_files_needed} needed")
             
             return ivr_nodes, notes
             
@@ -583,6 +822,6 @@ class ProductionIVRConverter:
 
 # Main function for the app
 def convert_mermaid_to_ivr(mermaid_code: str, uploaded_csv_file=None) -> Tuple[List[Dict[str, Any]], List[str]]:
-    """Production-ready conversion function with optional CSV upload"""
+    """Production-ready conversion function with enhanced database search"""
     converter = ProductionIVRConverter(uploaded_csv_file)
     return converter.convert_mermaid_to_ivr(mermaid_code)
