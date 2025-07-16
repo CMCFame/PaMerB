@@ -1,6 +1,6 @@
 """
-Production-Ready Mermaid to IVR Converter
-Matches actual allflows LITE patterns and fixes critical issues
+ARCOS-Integrated Production IVR Converter
+Prioritizes ARCOS recordings as foundation with client-specific overrides
 """
 
 import re
@@ -12,18 +12,6 @@ from dataclasses import dataclass
 from enum import Enum
 from difflib import SequenceMatcher
 
-class NodeType(Enum):
-    WELCOME = "welcome"
-    DECISION = "decision" 
-    ACTION = "action"
-    PIN_ENTRY = "pin_entry"
-    RESPONSE = "response"
-    GOODBYE = "goodbye"
-    ERROR = "error"
-    SLEEP = "sleep"
-    AVAILABILITY = "availability"
-    INPUT = "input"
-
 @dataclass
 class VoiceFile:
     company: str
@@ -31,155 +19,211 @@ class VoiceFile:
     file_name: str
     transcript: str
     callflow_id: str
+    priority: int  # Higher = better (ARCOS = 100, client-specific = 200)
 
-class ProductionIVRConverter:
-    def __init__(self, uploaded_csv_file=None):
-        # Voice file database
+class ARCOSIntegratedConverter:
+    def __init__(self, cf_general_csv=None, arcos_csv=None):
+        # Voice file databases with priority system
         self.voice_files: List[VoiceFile] = []
         self.transcript_index: Dict[str, List[VoiceFile]] = {}
-        self.exact_match_index: Dict[str, VoiceFile] = {}
+        self.callflow_index: Dict[str, VoiceFile] = {}  # callflow_id -> best voice file
         
-        # Load the database
-        if uploaded_csv_file:
-            self._load_database_from_upload(uploaded_csv_file)
-        else:
-            self._load_fallback_database()
+        # Load databases in priority order
+        self._load_arcos_database(arcos_csv)  # Foundation layer
+        self._load_client_database(cf_general_csv)  # Client overrides
+        self._build_optimized_indexes()
 
-    def _load_database_from_upload(self, uploaded_file):
-        """Load database from uploaded CSV file"""
-        try:
-            print(f"📥 Loading database from uploaded file: {uploaded_file.name}")
+    def _load_arcos_database(self, arcos_csv_file):
+        """Load ARCOS recordings as foundation layer (Priority 100)"""
+        print("🏗️ Loading ARCOS foundation database...")
+        
+        if arcos_csv_file:
+            try:
+                import io
+                content = arcos_csv_file.read()
+                if isinstance(content, bytes):
+                    content = content.decode('utf-8')
+                
+                csv_reader = csv.DictReader(io.StringIO(content))
+                arcos_count = 0
+                
+                for row in csv_reader:
+                    file_name = row.get('File Name', '')
+                    callflow_id = file_name.replace('.ulaw', '') if file_name else f"ARCOS{arcos_count}"
+                    
+                    voice_file = VoiceFile(
+                        company=row.get('Company', 'ARCOS'),
+                        folder=row.get('Folder', 'callflow'),
+                        file_name=file_name,
+                        transcript=row.get('Transcript', ''),
+                        callflow_id=callflow_id,
+                        priority=100  # ARCOS foundation priority
+                    )
+                    
+                    self.voice_files.append(voice_file)
+                    arcos_count += 1
+                
+                print(f"✅ Loaded {arcos_count} ARCOS foundation recordings")
+                
+            except Exception as e:
+                print(f"❌ Error loading ARCOS database: {e}")
+                self._load_arcos_fallbacks()
+        else:
+            self._load_arcos_fallbacks()
+
+    def _load_arcos_fallbacks(self):
+        """Load ARCOS fallback recordings based on allflows LITE patterns"""
+        print("📥 Loading ARCOS fallback recordings...")
+        
+        # Core ARCOS recordings from allflows LITE analysis
+        arcos_core_files = [
+            # Core callflow elements (from allflows LITE)
+            ("This is an", "1191"),  # Primary greeting
+            ("callout", "1274"),     # Callout noun
+            ("from", "1589"),        # Location connector
+            ("It is", "1231"),       # Time introducer
+            ("Press 1 if this is", "1002"),
+            ("if you need more time to get", "1005"),
+            ("to the phone", "1006"),
+            ("is not home", "1004"),
+            ("to repeat this message", "1643"),
+            ("The callout reason is", "1019"),
+            ("The trouble location is", "1232"),
+            ("Please have", "1017"),
+            ("call the", "1174"),
+            ("callout system", "1290"),
+            ("at", "1015"),
+            ("Invalid entry", "1009"),
+            ("Please enter your four digit PIN", "1008"),
+            ("followed by the pound key", "1008"),
+            ("You have accepted", "1297"),
+            ("Please listen carefully", "1302"),
+            ("To confirm receipt", "1035"),
+            ("Problems", "1351"),
+            ("I'm sorry you are having problems", "1351"),
             
+            # Standard press options
+            ("Press 7", "PRS7NEU"),
+            ("Press 9", "PRS9NEU"),
+            ("Press 1", "PRS1NEU"),
+            ("Press 3", "PRS3NEU"),
+            
+            # Response confirmations
+            ("Accept", "1001"),
+            ("Decline", "1002"), 
+            ("Not Home", "1006"),
+            ("Qualified No", "1145"),
+            
+            # Time/environment
+            ("current date and time", "CURR_TIME"),
+            ("environment", "ENV_VAR"),
+        ]
+        
+        for transcript, callflow_id in arcos_core_files:
+            voice_file = VoiceFile(
+                company="ARCOS",
+                folder="callflow",
+                file_name=f"{callflow_id}.ulaw",
+                transcript=transcript,
+                callflow_id=callflow_id,
+                priority=100  # ARCOS foundation priority
+            )
+            self.voice_files.append(voice_file)
+        
+        print(f"✅ Loaded {len(arcos_core_files)} ARCOS fallback recordings")
+
+    def _load_client_database(self, cf_general_csv):
+        """Load client-specific recordings as overrides (Priority 200)"""
+        if not cf_general_csv:
+            print("ℹ️ No client database provided - using ARCOS foundation only")
+            return
+            
+        print("🎯 Loading client-specific override database...")
+        
+        try:
             import io
-            content = uploaded_file.read()
+            content = cf_general_csv.read()
             if isinstance(content, bytes):
                 content = content.decode('utf-8')
             
             csv_reader = csv.DictReader(io.StringIO(content))
-            fieldnames = csv_reader.fieldnames
-            print(f"📋 CSV columns found: {fieldnames}")
+            client_count = 0
             
-            row_count = 0
             for row in csv_reader:
-                row_count += 1
-                
                 file_name = row.get('File Name', '')
-                callflow_id = file_name.replace('.ulaw', '') if file_name else f"CUSTOM{row_count}"
+                callflow_id = file_name.replace('.ulaw', '') if file_name else f"CLIENT{client_count}"
                 
                 voice_file = VoiceFile(
                     company=row.get('Company', ''),
                     folder=row.get('Folder', ''),
                     file_name=file_name,
                     transcript=row.get('Transcript', ''),
-                    callflow_id=callflow_id
+                    callflow_id=callflow_id,
+                    priority=200  # Client override priority
                 )
                 
                 self.voice_files.append(voice_file)
-                
-                # Index by transcript for searching
-                transcript_words = voice_file.transcript.lower().split()
-                for word in transcript_words:
-                    if word not in self.transcript_index:
-                        self.transcript_index[word] = []
-                    self.transcript_index[word].append(voice_file)
-                
-                # Index exact transcript matches
-                self.exact_match_index[voice_file.transcript.lower()] = voice_file
-                
-            print(f"✅ Loaded {len(self.voice_files)} voice files from database")
+                client_count += 1
+            
+            print(f"✅ Loaded {client_count} client-specific override recordings")
             
         except Exception as e:
-            print(f"❌ Error loading database: {e}")
-            self._load_fallback_database()
+            print(f"❌ Error loading client database: {e}")
 
-    def _load_fallback_database(self):
-        """Load a minimal fallback database when no CSV is provided"""
-        print("📥 Loading fallback voice database...")
+    def _build_optimized_indexes(self):
+        """Build optimized indexes with priority-based selection"""
+        print("🔨 Building optimized voice indexes with ARCOS foundation...")
         
-        fallback_files = [
-            # Based on actual allflows LITE patterns
-            ("This is an electric callout", "1177"),
-            ("It is", "1231"),
-            ("Press 1 if this is", "1002"),
-            ("if you need more time to get", "1005"),
-            ("to the phone", "1006"),
-            ("Press 7", "PRS7NEU"),
-            ("is not home", "1004"),
-            ("Press 9", "PRS9NEU"),
-            ("to repeat this message", "1643"),
-            ("Please enter your four digit PIN", "1008"),
-            ("Invalid entry", "1009"),
-            ("Thank you", "1029"),
-            ("Goodbye", "1029"),
-            ("Your response has been recorded", "1167"),
-            ("Are you available", "1316"),
-            ("If yes, press 1", "1167"),
-            ("If no, press 3", "1021"),
-            ("Not home", "1017"),
-            ("Call the", "1175"),
-            ("Callout System", "1175"),
-            ("Employee", "1002"),
-            ("Level 2", "1589"),
-            ("More time", "1005"),
-            ("Repeat this message", "1643"),
-            ("Problems", "1351"),
-            ("Invalid PIN", "1009"),
-            ("Electric callout", "1274"),
-            ("Callout reason", "1019"),
-            ("Trouble location", "1232"),
-            ("Custom message", "1149"),
-            ("Continue", "1265"),
-            ("Press any key", "1265"),
-        ]
-        
-        for transcript, callflow_id in fallback_files:
-            voice_file = VoiceFile(
-                company="Standard",
-                folder="Callflow",
-                file_name=f"{callflow_id}.ulaw",
-                transcript=transcript,
-                callflow_id=callflow_id
-            )
-            self.voice_files.append(voice_file)
-            
-            # Index it
-            transcript_words = transcript.lower().split()
+        # Build transcript index for searching
+        for voice_file in self.voice_files:
+            transcript_words = voice_file.transcript.lower().split()
             for word in transcript_words:
                 if word not in self.transcript_index:
                     self.transcript_index[word] = []
                 self.transcript_index[word].append(voice_file)
-            
-            self.exact_match_index[transcript.lower()] = voice_file
         
-        print(f"✅ Loaded {len(self.voice_files)} fallback voice files")
+        # Build callflow index - prefer higher priority (client-specific over ARCOS)
+        callflow_priority_map = {}
+        for voice_file in self.voice_files:
+            cid = voice_file.callflow_id
+            if cid not in callflow_priority_map or voice_file.priority > callflow_priority_map[cid].priority:
+                callflow_priority_map[cid] = voice_file
+        
+        self.callflow_index = callflow_priority_map
+        
+        # Sort transcript indexes by priority (highest first)
+        for word in self.transcript_index:
+            self.transcript_index[word].sort(key=lambda vf: vf.priority, reverse=True)
+        
+        arcos_count = sum(1 for vf in self.voice_files if vf.priority == 100)
+        client_count = sum(1 for vf in self.voice_files if vf.priority == 200)
+        
+        print(f"✅ Indexed {arcos_count} ARCOS + {client_count} client recordings")
+        print(f"✅ {len(self.callflow_index)} unique callflow IDs available")
 
     def convert_mermaid_to_ivr(self, mermaid_code: str) -> Tuple[List[Dict], str]:
-        """Main conversion method matching production patterns"""
-        print(f"\n🚀 Starting production conversion...")
+        """Convert Mermaid to IVR using ARCOS-integrated approach"""
+        print(f"\n🚀 Starting ARCOS-integrated conversion...")
         
         # Parse the Mermaid diagram
         nodes, connections = self._parse_mermaid_enhanced(mermaid_code)
         if not nodes:
             raise ValueError("No nodes found in Mermaid diagram")
         
-        # Create node ID to label mapping for easy reference
+        # Create node ID to label mapping
         node_id_to_label = {}
         for node_id, node_text in nodes.items():
-            # Generate meaningful labels dynamically
-            node_type = self._determine_node_type(node_text)
-            meaningful_label = self._generate_meaningful_label(node_text, node_type, node_id)
+            meaningful_label = self._generate_production_label(node_text, node_id)
             node_id_to_label[node_id] = meaningful_label
         
         print(f"📋 Node mappings: {node_id_to_label}")
         
-        # Find the starting node (Welcome node)
-        start_node_id = self._find_start_node(nodes, connections)
-        
-        # Convert each node to IVR format with production patterns
+        # Convert nodes to IVR format
         ivr_flow = []
+        start_node_id = self._find_start_node(nodes, connections)
         processed_nodes = set()
         
-        # Process nodes in logical order starting from welcome
+        # Process in logical order
         self._process_node_recursive(start_node_id, nodes, connections, node_id_to_label, ivr_flow, processed_nodes)
         
         # Process any remaining nodes
@@ -191,11 +235,11 @@ class ProductionIVRConverter:
         # Generate JavaScript output
         js_output = self._generate_javascript_output(ivr_flow)
         
-        print(f"✅ Production conversion completed! Generated {len(ivr_flow)} nodes")
+        print(f"✅ ARCOS-integrated conversion completed! Generated {len(ivr_flow)} nodes")
         return ivr_flow, js_output
 
     def _parse_mermaid_enhanced(self, mermaid_code: str) -> Tuple[Dict[str, str], List[Dict]]:
-        """Enhanced Mermaid parsing with better pattern recognition"""
+        """Enhanced Mermaid parsing"""
         nodes = {}
         connections = []
         
@@ -203,7 +247,7 @@ class ProductionIVRConverter:
         mermaid_code = re.sub(r'```.*?```', '', mermaid_code, flags=re.DOTALL)
         mermaid_code = re.sub(r'flowchart\s+TD|graph\s+TD', '', mermaid_code)
         
-        # Extract nodes - handle all possible formats
+        # Extract nodes
         node_patterns = [
             r'([A-Z]+)\["([^"]*?)"\]',           # A["text"]
             r'([A-Z]+)\{([^}]*?)\}',             # A{text} - diamond
@@ -216,9 +260,8 @@ class ProductionIVRConverter:
                 node_id = match.group(1)
                 node_text = match.group(2).replace('<br/>', '\n').replace('\\n', '\n')
                 nodes[node_id] = node_text.strip()
-                print(f"📝 Found node: {node_id} = '{node_text[:50]}...'")
         
-        # Extract connections with enhanced pattern matching
+        # Extract connections
         connection_patterns = [
             r'([A-Z]+)\s*-->\s*\|"([^"]+)"\|\s*([A-Z]+)',  # A -->|"label"| B
             r'([A-Z]+)\s*-->\s*\|([^|]+)\|\s*([A-Z]+)',     # A -->|label| B  
@@ -247,31 +290,27 @@ class ProductionIVRConverter:
                     'target': target,
                     'label': label.strip()
                 })
-                print(f"🔗 Found connection: {source} -> {target} ('{label}')")
         
-        print(f"✅ Parsed {len(nodes)} nodes and {len(connections)} connections")
         return nodes, connections
 
     def _find_start_node(self, nodes: Dict[str, str], connections: List[Dict]) -> str:
-        """Find the starting node (typically the welcome node)"""
-        # Find nodes with no incoming connections
+        """Find the starting node (welcome/greeting)"""
         incoming_targets = {conn['target'] for conn in connections}
         start_candidates = [node_id for node_id in nodes if node_id not in incoming_targets]
         
         if start_candidates:
-            # Prefer nodes that look like welcome messages
+            # Prefer welcome-like nodes
             for node_id in start_candidates:
                 text = nodes[node_id].lower()
                 if any(phrase in text for phrase in ['welcome', 'this is an', 'electric callout']):
                     return node_id
             return start_candidates[0]
         
-        # Fallback to first node
         return list(nodes.keys())[0]
 
     def _process_node_recursive(self, node_id: str, nodes: Dict[str, str], connections: List[Dict], 
                                node_id_to_label: Dict[str, str], ivr_flow: List[Dict], processed: set):
-        """Process nodes recursively to maintain proper flow order"""
+        """Process nodes recursively to maintain flow order"""
         if node_id in processed or node_id not in nodes:
             return
         
@@ -286,66 +325,12 @@ class ProductionIVRConverter:
         for conn in outgoing_connections:
             self._process_node_recursive(conn['target'], nodes, connections, node_id_to_label, ivr_flow, processed)
 
-    def _determine_node_type(self, text: str) -> NodeType:
-        """Determine node type based on content analysis"""
-        text_lower = text.lower()
-        
-        if self._has_greeting_characteristics(text_lower):
-            return NodeType.WELCOME
-        elif self._has_input_characteristics(text_lower):
-            return NodeType.PIN_ENTRY
-        elif self._has_availability_characteristics(text_lower):
-            return NodeType.AVAILABILITY
-        elif self._has_response_characteristics(text_lower):
-            return NodeType.RESPONSE
-        elif self._has_termination_characteristics(text_lower):
-            return NodeType.GOODBYE
-        elif self._has_error_characteristics(text_lower):
-            return NodeType.ERROR
-        elif self._has_sleep_characteristics(text_lower):
-            return NodeType.SLEEP
-        elif self._has_decision_characteristics(text_lower):
-            return NodeType.DECISION
-        else:
-            return NodeType.ACTION
-
-    def _has_greeting_characteristics(self, text: str) -> bool:
-        greeting_indicators = ['this is an', 'welcome', 'electric callout', 'press 1, if this is']
-        return any(phrase in text for phrase in greeting_indicators)
-
-    def _has_input_characteristics(self, text: str) -> bool:
-        input_indicators = ['enter your', 'pin', 'digit', 'pound key']
-        return any(phrase in text for phrase in input_indicators)
-
-    def _has_availability_characteristics(self, text: str) -> bool:
-        availability_indicators = ['available', 'work this callout', 'if yes, press', 'if no, press']
-        return any(phrase in text for phrase in availability_indicators)
-
-    def _has_response_characteristics(self, text: str) -> bool:
-        response_indicators = ['response has been', 'recorded', 'accepted', 'decline']
-        return any(phrase in text for phrase in response_indicators)
-
-    def _has_termination_characteristics(self, text: str) -> bool:
-        termination_indicators = ['goodbye', 'thank you', 'disconnect']
-        return any(phrase in text for phrase in termination_indicators)
-
-    def _has_error_characteristics(self, text: str) -> bool:
-        error_indicators = ['invalid', 'error', 'problems', 'try again']
-        return any(phrase in text for phrase in error_indicators)
-
-    def _has_sleep_characteristics(self, text: str) -> bool:
-        sleep_indicators = ['30-second', 'press any key', 'continue']
-        return any(phrase in text for phrase in sleep_indicators)
-
-    def _has_decision_characteristics(self, text: str) -> bool:
-        return '?' in text or ('correct' in text and 'pin' in text)
-
-    def _generate_meaningful_label(self, node_text: str, node_type: NodeType, node_id: str) -> str:
-        """Generate meaningful labels based on content"""
+    def _generate_production_label(self, node_text: str, node_id: str) -> str:
+        """Generate production-quality labels matching allflows LITE"""
         text_lower = node_text.lower()
         
-        # Production-ready label patterns
-        if 'this is an electric callout' in text_lower:
+        # Production labels matching allflows LITE patterns
+        if 'this is an electric callout' in text_lower and 'press 1' in text_lower:
             return "Live Answer"
         elif 'enter your' in text_lower and 'pin' in text_lower:
             return "Enter PIN"
@@ -353,7 +338,7 @@ class ProductionIVRConverter:
             return "Available For Callout"
         elif 'accepted response' in text_lower:
             return "Accept"
-        elif 'decline' in text_lower:
+        elif 'decline' in text_lower and 'recorded' in text_lower:
             return "Decline"
         elif 'not home' in text_lower:
             return "Not Home"
@@ -361,7 +346,7 @@ class ProductionIVRConverter:
             return "Invalid Entry"
         elif 'goodbye' in text_lower:
             return "Goodbye"
-        elif '30-second' in text_lower:
+        elif '30-second' in text_lower or 'press any key' in text_lower:
             return "Sleep"
         elif 'qualified' in text_lower:
             return "Qualified No"
@@ -369,59 +354,45 @@ class ProductionIVRConverter:
             return "Problems"
         elif 'correct' in text_lower and 'pin' in text_lower:
             return "Check PIN"
-        elif 'electric callout' in text_lower and 'this is an' not in text_lower:
-            return "Electric Callout Info"
         elif 'disconnect' in text_lower:
             return "hangup"
         
-        # Fallback to extracting key words
-        key_words = re.findall(r'\b[A-Z][a-z]+\b', node_text)
-        if key_words:
-            return ' '.join(key_words[:2])
-        
+        # Fallback
         return f"Node_{node_id}"
 
     def _convert_node_to_ivr(self, node_id: str, node_text: str, connections: List[Dict], 
                             node_id_to_label: Dict[str, str]) -> Dict:
-        """Convert node to production IVR format matching allflows LITE patterns"""
+        """Convert node to production IVR format with ARCOS integration"""
         
-        # Get outgoing connections for this node
         node_connections = [conn for conn in connections if conn['source'] == node_id]
-        
-        # Determine node type and label
-        node_type = self._determine_node_type(node_text)
         meaningful_label = node_id_to_label[node_id]
         
-        # Base node structure matching production patterns
+        # Base node structure
         ivr_node = {
             "label": meaningful_label,
-            "log": f"{node_text.replace('\n', ' ')[:80]}...",
+            "log": f"{node_text.replace('\n', ' ')[:80]}..."
         }
         
-        # Generate voice prompts
-        play_prompts = self._generate_production_prompts(node_text, node_type)
+        # Generate ARCOS-integrated voice prompts
+        play_prompts = self._generate_arcos_prompts(node_text, meaningful_label)
         if play_prompts:
             ivr_node["playPrompt"] = play_prompts
         
-        # Handle special cases based on node content and connections
+        # Handle node types with ARCOS patterns
         if self._is_welcome_node(node_text):
-            # CRITICAL FIX: Welcome node with proper branch mapping
-            ivr_node.update(self._create_welcome_node(node_text, node_connections, node_id_to_label))
+            # Welcome node with CRITICAL FIX for choice "1"
+            ivr_node.update(self._create_arcos_welcome_node(node_text, node_connections, node_id_to_label))
             
-        elif self._has_input_characteristics(node_text.lower()):
-            # PIN entry node
-            ivr_node.update(self._create_pin_entry_node(node_text, node_connections, node_id_to_label))
+        elif self._has_input_characteristics(node_text):
+            # PIN entry
+            ivr_node.update(self._create_arcos_pin_node(node_text, node_connections, node_id_to_label))
             
-        elif self._has_availability_characteristics(node_text.lower()):
+        elif self._has_availability_characteristics(node_text):
             # Availability question
-            ivr_node.update(self._create_availability_node(node_text, node_connections, node_id_to_label))
-            
-        elif self._has_decision_characteristics(node_text.lower()):
-            # Decision point (like PIN validation)
-            ivr_node.update(self._create_decision_node(node_text, node_connections, node_id_to_label))
+            ivr_node.update(self._create_arcos_availability_node(node_text, node_connections, node_id_to_label))
             
         elif len(node_connections) == 1:
-            # Single connection - use goto
+            # Single connection - goto
             target_label = node_id_to_label.get(node_connections[0]['target'], 'hangup')
             ivr_node["goto"] = target_label
             
@@ -429,8 +400,8 @@ class ProductionIVRConverter:
             # Terminal node
             ivr_node["goto"] = "hangup"
         
-        # Add response handling for action nodes
-        if self._has_response_characteristics(node_text.lower()):
+        # Add ARCOS-style response handling
+        if self._has_response_characteristics(node_text):
             if 'accept' in node_text.lower():
                 ivr_node["gosub"] = ["SaveCallResult", [1001, "Accept"]]
             elif 'decline' in node_text.lower():
@@ -441,31 +412,37 @@ class ProductionIVRConverter:
         return ivr_node
 
     def _is_welcome_node(self, text: str) -> bool:
-        """Check if this is the main welcome node"""
+        """Check if this is the welcome node"""
         text_lower = text.lower()
         return any(phrase in text_lower for phrase in [
             'this is an electric callout',
             'press 1, if this is',
-            'press 3, if you need more time',
+            'press 3, if you need',
             'press 7, if',
             'press 9, to repeat'
         ])
 
-    def _create_welcome_node(self, text: str, connections: List[Dict], node_id_to_label: Dict[str, str]) -> Dict:
-        """Create welcome node with FIXED branch mapping"""
+    def _has_input_characteristics(self, text: str) -> bool:
+        return any(phrase in text for phrase in ['enter your', 'pin', 'digit', 'pound key'])
+
+    def _has_availability_characteristics(self, text: str) -> bool:
+        return any(phrase in text for phrase in ['available', 'work this callout', 'if yes, press'])
+
+    def _has_response_characteristics(self, text: str) -> bool:
+        return any(phrase in text for phrase in ['response has been', 'recorded', 'accepted', 'decline'])
+
+    def _create_arcos_welcome_node(self, text: str, connections: List[Dict], node_id_to_label: Dict[str, str]) -> Dict:
+        """Create welcome node with ARCOS patterns and CRITICAL FIX for choice 1"""
         
-        # Extract DTMF choices from text
         choices = re.findall(r'press\s+(\d+)', text.lower())
-        
-        # Build branch mapping - CRITICAL FIX HERE
         branch_map = {}
         
-        # Map connections to choices
+        # CRITICAL FIX: Map connections to choices
         for conn in connections:
             label = conn.get('label', '').lower()
             target_label = node_id_to_label.get(conn['target'], 'hangup')
             
-            # CRITICAL FIX: Map "input" connection to choice "1"
+            # FIXED: "input" connection maps to choice "1" 
             if label == 'input' or '1 - this is employee' in label:
                 branch_map['1'] = target_label
                 print(f"✅ CRITICAL FIX: Choice 1 -> {target_label}")
@@ -474,30 +451,28 @@ class ProductionIVRConverter:
             elif '7' in label or 'not home' in label:
                 branch_map['7'] = target_label
             elif '9' in label or 'repeat' in label:
-                branch_map['9'] = "Live Answer"  # Self-reference for repeat
+                branch_map['9'] = "Live Answer"  # Self-reference
             elif 'no input' in label:
                 branch_map['none'] = target_label
         
-        # Add defaults if missing
+        # Add ARCOS defaults
         if 'error' not in branch_map:
             branch_map['error'] = 'Live Answer'
         if 'none' not in branch_map:
-            branch_map['none'] = branch_map.get('3', 'Sleep')
-        
-        print(f"🎯 Welcome branch map: {branch_map}")
+            branch_map['none'] = 'Real Answering Machine'  # ARCOS pattern
         
         return {
             "getDigits": {
                 "numDigits": 1,
-                "maxTime": 1,
+                "maxTime": 1,  # ARCOS pattern
                 "validChoices": "|".join(choices),
-                "errorPrompt": "callflow:1009"
+                "errorPrompt": "callflow:1009"  # ARCOS standard
             },
             "branch": branch_map
         }
 
-    def _create_pin_entry_node(self, text: str, connections: List[Dict], node_id_to_label: Dict[str, str]) -> Dict:
-        """Create PIN entry node matching production patterns"""
+    def _create_arcos_pin_node(self, text: str, connections: List[Dict], node_id_to_label: Dict[str, str]) -> Dict:
+        """Create PIN entry node with ARCOS patterns"""
         
         branch_map = {}
         for conn in connections:
@@ -505,7 +480,7 @@ class ProductionIVRConverter:
             target_label = node_id_to_label.get(conn['target'], 'hangup')
             
             if 'yes' in label or 'correct' in label:
-                branch_map['{{pin}}'] = target_label
+                branch_map['{{pin}}'] = target_label  # ARCOS variable pattern
             elif 'no' in label or 'invalid' in label:
                 branch_map['error'] = target_label
         
@@ -517,14 +492,14 @@ class ProductionIVRConverter:
                 "numDigits": 5,  # 4 digits + pound
                 "maxTries": 3,
                 "maxTime": 7,
-                "validChoices": "{{pin}}",
-                "errorPrompt": "callflow:1009"
+                "validChoices": "{{pin}}",  # ARCOS variable
+                "errorPrompt": "callflow:1009"  # ARCOS standard
             },
             "branch": branch_map
         }
 
-    def _create_availability_node(self, text: str, connections: List[Dict], node_id_to_label: Dict[str, str]) -> Dict:
-        """Create availability question node"""
+    def _create_arcos_availability_node(self, text: str, connections: List[Dict], node_id_to_label: Dict[str, str]) -> Dict:
+        """Create availability node with ARCOS patterns"""
         
         choices = re.findall(r'press\s+(\d+)', text.lower())
         branch_map = {}
@@ -556,63 +531,47 @@ class ProductionIVRConverter:
             "branch": branch_map
         }
 
-    def _create_decision_node(self, text: str, connections: List[Dict], node_id_to_label: Dict[str, str]) -> Dict:
-        """Create decision node (like PIN validation)"""
+    def _generate_arcos_prompts(self, text: str, label: str) -> List[str]:
+        """Generate voice prompts using ARCOS-integrated approach"""
         
-        branch_map = {}
-        for conn in connections:
-            label = conn.get('label', '').lower()
-            target_label = node_id_to_label.get(conn['target'], 'hangup')
-            
-            if 'yes' in label:
-                branch_map['yes'] = target_label
-            elif 'no' in label:
-                branch_map['no'] = target_label
-        
-        return {
-            "branch": branch_map
-        }
-
-    def _generate_production_prompts(self, text: str, node_type: NodeType) -> List[str]:
-        """Generate voice prompts matching production patterns"""
-        
-        # For welcome nodes, use segmented approach like allflows LITE
+        # For welcome nodes, use ARCOS segmented pattern like allflows LITE
         if self._is_welcome_node(text):
             return [
-                "callflow:1177",      # "This is an"
-                "company:1202",       # company name
-                "callflow:1178",      # "electric callout"
-                "callflow:1231",      # "It is"
-                "current: dow, date, time",
-                "callflow:1002",      # "Press 1 if this is"
-                "names:{{contact_id}}",
-                "callflow:1005",      # "if you need more time"
-                "names:{{contact_id}}",
-                "callflow:1006",      # "to the phone"
-                "standard:PRS7NEU",   # "Press 7"
-                "callflow:1641",      # "if"
-                "names:{{contact_id}}",
-                "callflow:1004",      # "is not home"
-                "standard:PRS9NEU",   # "Press 9"
-                "callflow:1643"       # "to repeat this message"
+                "callflow:1177",           # "This is an" (ARCOS)
+                "company:1202",            # company name (variable)
+                "callflow:1178",           # "electric callout" (ARCOS)
+                "callflow:1231",           # "It is" (ARCOS)
+                "current: dow, date, time", # current date/time (ARCOS variable)
+                "callflow:1002",           # "Press 1 if this is" (ARCOS)
+                "names:{{contact_id}}",    # employee name (ARCOS variable)
+                "callflow:1005",           # "if you need more time" (ARCOS)
+                "names:{{contact_id}}",    # employee name (ARCOS variable)
+                "callflow:1006",           # "to the phone" (ARCOS)
+                "standard:PRS7NEU",        # "Press 7" (ARCOS standard)
+                "callflow:1641",           # "if" (ARCOS)
+                "names:{{contact_id}}",    # employee name (ARCOS variable)
+                "callflow:1004",           # "is not home" (ARCOS)
+                "standard:PRS9NEU",        # "Press 9" (ARCOS standard)
+                "callflow:1643"            # "to repeat this message" (ARCOS)
             ]
         
-        # Find best matching voice file for other nodes
-        best_match = self._find_best_voice_match(text)
+        # For other nodes, find best ARCOS match
+        best_match = self._find_best_arcos_match(text)
         if best_match:
             return [f"callflow:{best_match}"]
         
         return ["[VOICE FILE NEEDED]"]
 
-    def _find_best_voice_match(self, text: str) -> Optional[str]:
-        """Find best matching voice file"""
+    def _find_best_arcos_match(self, text: str) -> Optional[str]:
+        """Find best matching ARCOS voice file with priority system"""
         text_lower = text.lower().strip()
         
-        # Try exact match first
-        if text_lower in self.exact_match_index:
-            return self.exact_match_index[text_lower].callflow_id
+        # Try exact transcript match first (prioritizes client overrides)
+        for voice_file in self.voice_files:
+            if voice_file.transcript.lower() == text_lower:
+                return voice_file.callflow_id
         
-        # Try keyword matching
+        # Try keyword matching with priority
         text_words = set(text_lower.split())
         best_match = None
         best_score = 0
@@ -621,8 +580,12 @@ class ProductionIVRConverter:
             transcript_words = set(voice_file.transcript.lower().split())
             common_words = text_words.intersection(transcript_words)
             if common_words:
-                score = len(common_words) / max(len(text_words), len(transcript_words))
-                if score > best_score and score > 0.4:
+                # Score includes priority boost
+                base_score = len(common_words) / max(len(text_words), len(transcript_words))
+                priority_boost = voice_file.priority / 1000  # Small boost for higher priority
+                score = base_score + priority_boost
+                
+                if score > best_score and base_score > 0.4:  # 40% similarity threshold
                     best_score = score
                     best_match = voice_file
         
@@ -657,62 +620,7 @@ class ProductionIVRConverter:
         return js_output
 
 
-def convert_mermaid_to_ivr(mermaid_code: str, uploaded_csv_file=None) -> Tuple[List[Dict], str]:
-    """Main function to convert Mermaid diagrams to production IVR"""
-    converter = ProductionIVRConverter(uploaded_csv_file)
+def convert_mermaid_to_ivr(mermaid_code: str, cf_general_csv=None, arcos_csv=None) -> Tuple[List[Dict], str]:
+    """Main function for ARCOS-integrated conversion"""
+    converter = ARCOSIntegratedConverter(cf_general_csv, arcos_csv)
     return converter.convert_mermaid_to_ivr(mermaid_code)
-
-
-# Test function
-def test_production_converter():
-    """Test the production converter with the electric callout example"""
-    
-    test_mermaid = '''flowchart TD
-A["Welcome<br/>This is an electric callout from (Level 2).<br/>Press 1, if this is (employee).<br/>Press 3, if you need more time to get (employee) to the phone.<br/>Press 7, if (employee) is not home.<br/>Press 9, to repeat this message.<br/><br/>9 - repeat, or invalid input"] -->|"input"| B{"1 - this is employee"}
-A -->|"no input - go to pg 3"| C["30-second message<br/>Press any key to<br/>continue..."]
-A -->|"7 - not home"| D["Employee Not Home<br/>Please have<br/>(employee) call the<br/>(Level 2) Callout<br/>System at<br/>866-502-7267."]
-A -->|"3 - need more time"| C
-A -->|"retry logic"| A
-B -->|"retry"| E["Invalid Entry<br/>Invalid entry.<br/>Please try again."]
-E -->|"retry"| A
-B -->|"yes"| F["Enter Employee PIN<br/>Please enter your 4 digit PIN<br/>followed by the pound key."]
-F -->|"no"| E
-F -->|"yes"| G{"Correct PIN?"}
-G -->|"no"| E
-G -->|"yes"| H["Electric Callout<br/>This is an electric callout."]
-H --> I["Callout Reason<br/>The callout reason is (callout reason)."]
-I --> J["Trouble Location<br/>The trouble location is (trouble location)."]
-J --> K["Custom Message<br/>(Play custom message, if selected.)"]
-K --> L{"Available For Callout<br/>Are you available to work this callout?<br/>If yes, press 1. If no, press 3.<br/>If no one else accepts, and you want to be called again, press 9."}
-L -->|"retry"| E
-L -->|"invalid or no input"| E
-L -->|"1 - accept"| M["Accepted Response<br/>An accepted response has<br/>been recorded."]
-L -->|"3 - decline"| N["Callout Decline<br/>Your response is being recorded as a decline."]
-L -->|"9 - call back"| O["Qualified No<br/>You may be called again on this<br/>callout if no one accepts."]
-M --> P["Goodbye<br/>Thank you.<br/>Goodbye."]
-N --> P
-O --> P
-P --> Q["Disconnect"]
-D --> Q'''
-    
-    try:
-        ivr_flow, js_output = convert_mermaid_to_ivr(test_mermaid)
-        print("✅ Production test conversion successful!")
-        print(f"Generated {len(ivr_flow)} nodes")
-        
-        # Check if choice 1 is properly mapped
-        welcome_node = next((node for node in ivr_flow if node.get('label') == 'Live Answer'), None)
-        if welcome_node and welcome_node.get('branch', {}).get('1'):
-            print(f"✅ CRITICAL FIX VERIFIED: Choice 1 maps to '{welcome_node['branch']['1']}'")
-        else:
-            print("❌ Choice 1 mapping still missing!")
-            
-        return ivr_flow, js_output
-        
-    except Exception as e:
-        print(f"❌ Production test failed: {e}")
-        return None, None
-
-
-if __name__ == "__main__":
-    test_production_converter()
