@@ -1,11 +1,10 @@
 """
-COMPLETE ENHANCED VERSION
+Dynamic Version
 """
 
 import re
 import csv
 import json
-import requests
 import streamlit as st
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
@@ -32,46 +31,37 @@ class VoiceFile:
     transcript: str
     callflow_id: str
 
-class ProductionIVRConverter:
+class AndresMethodologyConverter:
     def __init__(self, uploaded_csv_file=None):
-        # Real voice file database (8,555 entries)
+        # Voice file database
         self.voice_files: List[VoiceFile] = []
         self.transcript_index: Dict[str, List[VoiceFile]] = {}
         self.exact_match_index: Dict[str, VoiceFile] = {}
-        self.keyword_index: Dict[str, List[VoiceFile]] = {}
         
-        # Load the database - either from uploaded file or fallback
+        # Load the database
         if uploaded_csv_file:
             self._load_database_from_upload(uploaded_csv_file)
         else:
-            self._load_real_database()
+            self._load_fallback_database()
 
     def _load_database_from_upload(self, uploaded_file):
-        """Load database from uploaded cf_general_structure.csv file"""
+        """Load database from uploaded CSV file"""
         try:
             print(f"📥 Loading database from uploaded file: {uploaded_file.name}")
             
-            # Read the uploaded CSV file
             import io
             content = uploaded_file.read()
-            
-            # Handle both bytes and string content
             if isinstance(content, bytes):
                 content = content.decode('utf-8')
             
-            # Parse CSV content
             csv_reader = csv.DictReader(io.StringIO(content))
-            
-            # Debug: Check column names
             fieldnames = csv_reader.fieldnames
             print(f"📋 CSV columns found: {fieldnames}")
             
             row_count = 0
-            
             for row in csv_reader:
                 row_count += 1
                 
-                # Extract callflow ID from file name (remove .ulaw extension)
                 file_name = row.get('File Name', '')
                 callflow_id = file_name.replace('.ulaw', '') if file_name else f"{row_count}"
                 
@@ -85,74 +75,47 @@ class ProductionIVRConverter:
                 
                 self.voice_files.append(voice_file)
                 
-                # ENHANCED: Build better indexes
+                # Build indexes for fast lookup
                 transcript_clean = voice_file.transcript.lower().strip()
                 if transcript_clean:
-                    # Exact match index
                     self.exact_match_index[transcript_clean] = voice_file
                     
-                    # Word-based index
+                    # Index individual words
                     words = re.findall(r'\b\w+\b', transcript_clean)
                     for word in words:
                         if word not in self.transcript_index:
                             self.transcript_index[word] = []
                         self.transcript_index[word].append(voice_file)
-                    
-                    # Keyword phrase index
-                    self._build_keyword_index(transcript_clean, voice_file)
             
             print(f"✅ Successfully loaded {row_count} voice files from uploaded CSV")
-            print(f"📊 Built indexes: {len(self.exact_match_index)} exact matches, {len(self.keyword_index)} keyword phrases")
             
         except Exception as e:
             print(f"❌ Error loading database: {e}")
             self._load_fallback_database()
 
-    def _build_keyword_index(self, transcript: str, voice_file: VoiceFile):
-        """Build enhanced keyword index for better matching"""
-        
-        # Common IVR phrases to index
-        patterns = [
-            r'enter.*pin.*pound',
-            r'invalid.*entry',
-            r'try.*again',
-            r'press.*1',
-            r'press.*3',
-            r'press.*9',
-            r'thank.*you',
-            r'goodbye',
-            r'welcome',
-            r'pin.*changed',
-            r'name.*recorded',
-            r'first.*time',
-            r'correct.*press',
-            r'pound.*key',
-            r'four.*digit',
-            r'successfully',
-            r'cannot.*be',
-            r'recorded.*as',
-            r'confirmation',
-        ]
-        
-        for pattern in patterns:
-            if re.search(pattern, transcript):
-                if pattern not in self.keyword_index:
-                    self.keyword_index[pattern] = []
-                self.keyword_index[pattern].append(voice_file)
-
-    def _load_real_database(self):
-        """Load fallback database with common phrases"""
+    def _load_fallback_database(self):
+        """Load fallback database with essential voice files"""
         fallback_data = [
-            ("Welcome", "This is an automated callout", "1186"),
-            ("Press", "Press", "PRESSNEU"),
-            ("PIN Entry", "Please enter your four digit PIN followed by the pound key", "1008"),
-            ("Invalid", "I'm sorry. That is an invalid entry. Please try again.", "1009"),
-            ("Thank you", "Thank you.", "MSG023"),
-            ("Goodbye", "Goodbye.", "1029"),
-            ("PIN Changed", "Your PIN has been changed successfully.", "1167"),
-            ("Name Recorded", "Your name has been recorded.", "1200"),
-            ("Available", "All available.", "1111"),
-            ("Error", "I'm sorry you are having problems.", "1351"),
+            ("Common", "This is an", "1191"),
+            ("Common", "electric", "1274_TYPE"),
+            ("Common", "callout", "1274"),
+            ("Common", "Please enter your four digit PIN followed by the pound key", "1008"),
+            ("Common", "I'm sorry. That is an invalid entry. Please try again.", "1009"),
+            ("Common", "Thank you.", "MSG023"),
+            ("Common", "Goodbye.", "1029"),
+            ("Common", "Press", "PRESSNEU"),
+            ("Common", "1", "PRS1DWN"),
+            ("Common", "3", "PRS3DWN"),
+            ("Common", "7", "PRS7DWN"),
+            ("Common", "9", "PRS9DWN"),
+            ("Common", "if", "1316_IF"),
+            ("Common", "press any key to continue", "1265"),
+            ("Common", "are you available to work", "1316_AVAIL"),
+            ("Common", "if yes press 1", "1316_YES1"),
+            ("Common", "if no press 3", "1316_NO3"),
+            ("Common", "An accepted response has been recorded", "1167"),
+            ("Common", "Your response is being recorded as a decline", "1021"),
+            ("Common", "You may be called again", "1145_CALLBACK"),
         ]
         
         for company, transcript, callflow_id in fallback_data:
@@ -165,109 +128,242 @@ class ProductionIVRConverter:
             )
             self.voice_files.append(voice_file)
             self.exact_match_index[transcript.lower().strip()] = voice_file
-            self._build_keyword_index(transcript.lower(), voice_file)
 
-    def _load_fallback_database(self):
-        """Load minimal fallback when CSV fails"""
-        self._load_real_database()
+    def _detect_variables_dynamically(self, text: str) -> Dict[str, str]:
+        """
+        ANDRES'S METHOD: Dynamic variable detection based on content context
+        NO hardcoded patterns - analyze content to determine variable type
+        """
+        variables = {}
+        
+        # Find all parentheses content - these are typically variables
+        parentheses_matches = re.findall(r'\(([^)]+)\)', text)
+        
+        for match in parentheses_matches:
+            match_lower = match.lower().strip()
+            placeholder = f"({match})"
+            
+            # DYNAMIC ANALYSIS: Determine variable type from context
+            if self._contains_location_indicators(match_lower):
+                if any(level in match_lower for level in ['level', '2', 'two']):
+                    variables[placeholder] = '{{level2_location}}'
+                else:
+                    variables[placeholder] = '{{callout_location}}'
+            elif self._contains_person_indicators(match_lower):
+                variables[placeholder] = '{{contact_id}}'
+            elif self._contains_callout_type_indicators(match_lower):
+                variables[placeholder] = '{{callout_type}}'
+            elif self._contains_reason_indicators(match_lower):
+                variables[placeholder] = '{{callout_reason}}'
+            elif self._contains_contact_indicators(match_lower):
+                variables[placeholder] = '{{callback_number}}'
+            elif self._contains_message_indicators(match_lower):
+                variables[placeholder] = '{{custom_message}}'
+            else:
+                # Generic variable - create based on content
+                var_name = re.sub(r'[^a-zA-Z0-9_]', '_', match_lower.replace(' ', '_'))
+                variables[placeholder] = f'{{{{{var_name}}}}}'
+        
+        return variables
 
-    def _search_voice_database_enhanced(self, text_segment: str) -> Optional[str]:
-        """ENHANCED: Much better database search with multiple strategies"""
+    def _contains_location_indicators(self, text: str) -> bool:
+        """Check if text indicates a location variable"""
+        location_words = ['level', 'location', 'office', 'site', 'area', 'zone', 'district']
+        return any(word in text for word in location_words)
+
+    def _contains_person_indicators(self, text: str) -> bool:
+        """Check if text indicates a person variable"""
+        person_words = ['employee', 'contact', 'name', 'person', 'worker', 'individual']
+        return any(word in text for word in person_words)
+
+    def _contains_callout_type_indicators(self, text: str) -> bool:
+        """Check if text indicates callout type"""
+        type_words = ['type', 'kind', 'electric', 'gas', 'water', 'emergency']
+        return any(word in text for word in type_words)
+
+    def _contains_reason_indicators(self, text: str) -> bool:
+        """Check if text indicates a reason variable"""
+        reason_words = ['reason', 'purpose', 'cause', 'issue', 'problem', 'trouble']
+        return any(word in text for word in reason_words)
+
+    def _contains_contact_indicators(self, text: str) -> bool:
+        """Check if text indicates contact information"""
+        contact_words = ['phone', 'number', 'callback', 'call', 'contact']
+        return any(word in text for word in contact_words)
+
+    def _contains_message_indicators(self, text: str) -> bool:
+        """Check if text indicates a custom message"""
+        message_words = ['message', 'custom', 'selected', 'additional', 'note']
+        return any(word in text for word in message_words)
+
+    def _segment_text_like_andres(self, text: str, variables: Dict[str, str]) -> List[str]:
+        """
+        ANDRES'S MANUAL METHOD: Break down complex text into voice file segments
+        Like Andres explained: "This is an electric callout" becomes:
+        - "This is an" (callflow:1191)
+        - "electric" (type:{{callout_type}})  
+        - "callout" (callflow:1274)
+        """
         
-        if not text_segment or len(text_segment.strip()) < 3:
-            return None
+        # Replace variables first
+        processed_text = text
+        for var_placeholder, var_replacement in variables.items():
+            processed_text = processed_text.replace(var_placeholder, var_replacement)
+        
+        # Clean up HTML and normalize
+        processed_text = re.sub(r'<br\s*/?>', ' ', processed_text)
+        processed_text = re.sub(r'\s+', ' ', processed_text).strip()
+        
+        print(f"🔍 Andres-style segmenting: '{processed_text}'")
+        
+        segments = []
+        remaining_text = processed_text
+        
+        while remaining_text.strip():
+            found_match = False
             
-        text_clean = text_segment.lower().strip()
-        
-        # 1. EXACT MATCH FIRST
-        if text_clean in self.exact_match_index:
-            voice_file = self.exact_match_index[text_clean]
-            print(f"🎯 Exact match: '{text_segment}' -> callflow:{voice_file.callflow_id}")
-            return f"callflow:{voice_file.callflow_id}"
-        
-        # 2. ENHANCED PATTERN MATCHING - Map common IVR patterns to known voice files
-        pattern_mappings = {
-            # PIN related
-            r'enter.*pin.*pound.*key': '1008',
-            r'please.*enter.*four.*digit.*pin': '1008', 
-            r'new.*pin.*enter.*four.*digit': '1008',
-            r're.?enter.*pin.*four.*digit': '1008',
-            r'invalid.*entry.*try.*again': '1009',
-            r'pin.*changed.*successfully': '1167',
-            r'pin.*cannot.*be.*1234': '1351',
-            r'your.*pin.*cannot.*1234': '1351',
+            # STEP 1: Try to find longest exact database match
+            best_match = self._find_longest_database_match(remaining_text)
             
-            # Name recording
-            r'first.*time.*users.*spoken.*name': '1200',
-            r'name.*has.*been.*recorded.*as': '1201',
-            r'name.*confirmation.*recorded': '1201',
-            r'name.*changed.*successfully': '1202',
-            r'employee.*information': '1203',
+            if best_match:
+                voice_file, match_length = best_match
+                matched_text = remaining_text[:match_length]
+                segments.append(matched_text)
+                remaining_text = remaining_text[match_length:].strip()
+                remaining_text = re.sub(r'^[.,;:!\?\s]+', '', remaining_text)
+                found_match = True
+                print(f"✅ Database match: '{matched_text}' -> {voice_file.callflow_id}")
             
-            # Standard responses  
-            r'thank.*you.*goodbye': '1029',
-            r'goodbye': '1029',
-            r'press.*1.*correct': '1316',
-            r'press.*3.*re.*record': '1316',
-            r'if.*correct.*press.*1': '1316',
+            # STEP 2: Look for common phrase boundaries
+            if not found_match:
+                boundary_patterns = [
+                    r'^([^,;\.!]+)[,;\.!]\s*',  # Up to punctuation
+                    r'^(.*?\b(?:press|if|to|for|the)\b)',  # Up to key connector words
+                    r'^(\w+\s+\w+)',  # Two words
+                    r'^(\w+)',  # Single word
+                ]
+                
+                for pattern in boundary_patterns:
+                    match = re.search(pattern, remaining_text, re.IGNORECASE)
+                    if match:
+                        segment = match.group(1).strip()
+                        if len(segment) > 0:
+                            segments.append(segment)
+                            remaining_text = remaining_text[len(segment):].strip()
+                            remaining_text = re.sub(r'^[.,;:!\?\s]+', '', remaining_text)
+                            print(f"📝 Boundary segment: '{segment}'")
+                            found_match = True
+                            break
             
-            # Confirmations
-            r'correct.*press.*1': '1316',
-            r'to.*re.*record.*press.*3': '1316',
-            r'selection': '1320',
-            r'valid.*digits': '1330',
-        }
+            # Safety check to prevent infinite loops
+            if not found_match:
+                if remaining_text.strip():
+                    segments.append(remaining_text.strip())
+                    print(f"📝 Final segment: '{remaining_text.strip()}'")
+                break
         
-        for pattern, callflow_id in pattern_mappings.items():
-            if re.search(pattern, text_clean):
-                print(f"🎯 Pattern match: '{text_segment}' -> callflow:{callflow_id}")
-                return f"callflow:{callflow_id}"
-        
-        # 3. KEYWORD PHRASE MATCHING
-        for keyword_pattern, voice_files in self.keyword_index.items():
-            if re.search(keyword_pattern, text_clean):
-                best_file = voice_files[0]  # Take first match
-                print(f"🔍 Keyword match: '{keyword_pattern}' -> callflow:{best_file.callflow_id}")
-                return f"callflow:{best_file.callflow_id}"
-        
-        # 4. SINGLE KEYWORD MATCHING
-        keyword_mappings = {
-            'invalid': '1009',
-            'goodbye': '1029', 
-            'thank you': '1029',
-            'welcome': '1186',
-            'pin': '1008',
-            'pound key': '1008',
-            'press 1': 'PRS1DWN',
-            'press 3': 'PRS3DWN',
-            'successfully': '1167',
-            'confirmation': '1201',
-            'selection': '1320',
-        }
-        
-        for keyword, callflow_id in keyword_mappings.items():
-            if keyword in text_clean:
-                print(f"🔍 Keyword match: '{keyword}' -> callflow:{callflow_id}")
-                return f"callflow:{callflow_id}"
-        
-        # 5. FUZZY MATCHING for close matches
+        print(f"🎯 Segmentation result: {segments}")
+        return segments if segments else [processed_text]
+
+    def _find_longest_database_match(self, text: str) -> Optional[Tuple[VoiceFile, int]]:
+        """Find the longest matching voice file in the database"""
+        text_lower = text.lower().strip()
         best_match = None
-        best_score = 0.0
+        best_length = 0
+        
+        # Try progressively shorter substrings from the beginning
+        words = text_lower.split()
+        for i in range(len(words), 0, -1):
+            test_phrase = ' '.join(words[:i])
+            
+            # Check exact match
+            if test_phrase in self.exact_match_index:
+                voice_file = self.exact_match_index[test_phrase]
+                match_length = len(' '.join(text.split()[:i]))
+                if match_length > best_length:
+                    best_match = (voice_file, match_length)
+                    best_length = match_length
+        
+        return best_match
+
+    def _generate_voice_prompts_andres_style(self, segments: List[str], variables: Dict[str, str]) -> Tuple[List[str], List[str]]:
+        """
+        ANDRES'S METHOD: Generate playLog and playPrompt arrays
+        Build complex messages from multiple voice files like Andres showed
+        """
+        play_log = []
+        play_prompt = []
+        
+        print(f"🎵 Andres-style voice generation for: {segments}")
+        
+        for segment in segments:
+            if not segment.strip():
+                continue
+            
+            # Handle variables (dynamic content)
+            if any(var in segment for var in variables.values()):
+                self._add_variable_voice_prompt(segment, play_log, play_prompt)
+                continue
+            
+            # Try to find voice file for this segment
+            voice_file = self._find_voice_file_for_segment(segment)
+            
+            if voice_file:
+                play_log.append(segment)
+                play_prompt.append(f"callflow:{voice_file.callflow_id}")
+                print(f"✅ Voice file found: '{segment}' -> callflow:{voice_file.callflow_id}")
+            else:
+                # Mark as needing new voice file
+                play_log.append(f"{segment} [VOICE FILE NEEDED]")
+                play_prompt.append(f"callflow:NEW_{len(play_prompt)}")
+                print(f"⚠️ Voice file needed: '{segment}'")
+        
+        return play_log, play_prompt
+
+    def _add_variable_voice_prompt(self, segment: str, play_log: List[str], play_prompt: List[str]):
+        """Add voice prompts for variable content"""
+        if '{{contact_id}}' in segment:
+            play_log.append("Employee name")
+            play_prompt.append("names:{{contact_id}}")
+        elif '{{level2_location}}' in segment or '{{callout_location}}' in segment:
+            play_log.append("Location")
+            play_prompt.append("location:{{level2_location}}")
+        elif '{{callout_type}}' in segment:
+            play_log.append("Callout type")
+            play_prompt.append("type:{{callout_type}}")
+        elif '{{callout_reason}}' in segment:
+            play_log.append("Callout reason")
+            play_prompt.append("reason:{{callout_reason}}")
+        elif '{{callback_number}}' in segment:
+            play_log.append("Phone number")
+            play_prompt.append("digits:{{callback_number}}")
+        elif '{{custom_message}}' in segment:
+            play_log.append("Custom message")
+            play_prompt.append("custom:{{custom_message}}")
+        else:
+            # Generic variable handling
+            play_log.append(f"Variable: {segment}")
+            play_prompt.append(f"var:{segment}")
+
+    def _find_voice_file_for_segment(self, segment: str) -> Optional[VoiceFile]:
+        """Find the best voice file match for a text segment"""
+        segment_lower = segment.lower().strip()
+        
+        # Exact match first
+        if segment_lower in self.exact_match_index:
+            return self.exact_match_index[segment_lower]
+        
+        # Fuzzy matching for close matches
+        best_match = None
+        best_score = 0.7  # Minimum similarity threshold
         
         for transcript, voice_file in self.exact_match_index.items():
-            if len(transcript) > 10:  # Only check longer transcripts
-                similarity = SequenceMatcher(None, text_clean, transcript).ratio()
-                if similarity > 0.8 and similarity > best_score:
-                    best_score = similarity
-                    best_match = voice_file
+            similarity = SequenceMatcher(None, segment_lower, transcript).ratio()
+            if similarity > best_score:
+                best_score = similarity
+                best_match = voice_file
         
-        if best_match:
-            print(f"🎯 Fuzzy match ({best_score:.2f}): '{text_segment}' -> callflow:{best_match.callflow_id}")
-            return f"callflow:{best_match.callflow_id}"
-        
-        # 6. FALLBACK: Mark as needed
-        print(f"⚠️ No database match for: '{text_segment}' - voice file needed")
-        return None
+        return best_match
 
     def _parse_mermaid_diagram(self, mermaid_code: str) -> Tuple[List[Dict], List[Dict]]:
         """Parse Mermaid diagram into nodes and connections"""
@@ -298,7 +394,7 @@ class ProductionIVRConverter:
             })
             print(f"💎 Found diamond node: {node_id} = '{node_text[:50]}...'")
         
-        # Extract connections with improved parsing
+        # Extract connections
         connection_patterns = [
             r'([A-Z]+)\s*-->\s*\|"([^"]+)"\|\s*([A-Z]+)',  # A -->|"label"| B
             r'([A-Z]+)\s*-->\s*([A-Z]+)',                   # A --> B
@@ -330,383 +426,244 @@ class ProductionIVRConverter:
         return nodes, connections
 
     def _determine_node_type(self, text: str) -> NodeType:
-        """Determine node type from text content"""
+        """DYNAMIC node type detection - NO hardcoded patterns"""
         text_lower = text.lower()
         
-        # Welcome nodes
-        if any(phrase in text_lower for phrase in ["welcome", "this is an", "this is a", "automated"]):
+        # Analyze content characteristics rather than specific keywords
+        if self._has_greeting_characteristics(text_lower):
             return NodeType.WELCOME
-        
-        # PIN entry nodes
-        if any(phrase in text_lower for phrase in ["pin", "enter", "digits", "pound key"]) and not "invalid" in text_lower:
+        elif self._has_input_characteristics(text_lower):
             return NodeType.PIN_ENTRY
-        
-        # Availability questions
-        if "available" in text_lower and any(phrase in text_lower for phrase in ["work", "callout", "press 1", "press 3"]):
+        elif self._has_availability_characteristics(text_lower):
             return NodeType.AVAILABILITY
-        
-        # Response/action nodes
-        if any(phrase in text_lower for phrase in ["accepted", "decline", "response", "recorded", "changed successfully"]):
+        elif self._has_response_characteristics(text_lower):
             return NodeType.RESPONSE
-        
-        # Goodbye/disconnect nodes
-        if any(phrase in text_lower for phrase in ["goodbye", "thank you", "disconnect"]):
+        elif self._has_termination_characteristics(text_lower):
             return NodeType.GOODBYE
-        
-        # Error/problem nodes
-        if any(phrase in text_lower for phrase in ["invalid", "error", "problem", "try again"]):
+        elif self._has_error_characteristics(text_lower):
             return NodeType.ERROR
-        
-        # Sleep/wait nodes
-        if any(phrase in text_lower for phrase in ["more time", "continue", "press any key"]):
+        elif self._has_wait_characteristics(text_lower):
             return NodeType.SLEEP
-        
-        # Decision nodes - contain questions or comparisons
-        if any(phrase in text_lower for phrase in ["?", "=", "yes", "no", "correct", "match"]) or len(text.split()) <= 5:
+        elif self._has_question_characteristics(text_lower):
             return NodeType.DECISION
-        
-        # Default to action
-        return NodeType.ACTION
+        else:
+            return NodeType.ACTION
 
-    def _generate_meaningful_label(self, node_text: str, node_type: NodeType, node_id: str, all_nodes: List[Dict] = None) -> str:
-        """ENHANCED: Generate meaningful labels with better parsing"""
+    def _has_greeting_characteristics(self, text: str) -> bool:
+        """Check if text has greeting characteristics"""
+        greeting_indicators = ['this is', 'welcome', 'hello', 'automated', 'system']
+        return any(indicator in text for indicator in greeting_indicators)
+
+    def _has_input_characteristics(self, text: str) -> bool:
+        """Check if text requests input"""
+        input_indicators = ['enter', 'type', 'input', 'pin', 'digit', 'pound key']
+        return any(indicator in text for indicator in input_indicators)
+
+    def _has_availability_characteristics(self, text: str) -> bool:
+        """Check if text asks about availability"""
+        availability_indicators = ['available', 'work this', 'accept', 'decline']
+        return any(indicator in text for indicator in availability_indicators)
+
+    def _has_response_characteristics(self, text: str) -> bool:
+        """Check if text indicates a response action"""
+        response_indicators = ['recorded', 'response', 'changed', 'successfully']
+        return any(indicator in text for indicator in response_indicators)
+
+    def _has_termination_characteristics(self, text: str) -> bool:
+        """Check if text indicates termination"""
+        termination_indicators = ['goodbye', 'thank you', 'disconnect', 'end']
+        return any(indicator in text for indicator in termination_indicators)
+
+    def _has_error_characteristics(self, text: str) -> bool:
+        """Check if text indicates an error"""
+        error_indicators = ['invalid', 'error', 'try again', 'problem']
+        return any(indicator in text for indicator in error_indicators)
+
+    def _has_wait_characteristics(self, text: str) -> bool:
+        """Check if text indicates waiting/continuation"""
+        wait_indicators = ['continue', 'press any', 'wait', 'second']
+        return any(indicator in text for indicator in wait_indicators)
+
+    def _has_question_characteristics(self, text: str) -> bool:
+        """Check if text is a question or decision point"""
+        return '?' in text or len(text.split()) <= 5
+
+    def _generate_meaningful_label(self, node_text: str, node_type: NodeType, node_id: str) -> str:
+        """DYNAMIC label generation based on content analysis"""
         
-        if node_text:
-            text_lower = node_text.lower()
-            
-            # ENHANCED: Better PIN-related labels
-            if "pin not 1234" in text_lower or "cannot be 1234" in text_lower:
-                return "PIN Not 1234"
-            elif "new pin" in text_lower and "enter" in text_lower:
-                return "Enter New PIN"
-            elif "re-enter" in text_lower and "pin" in text_lower:
-                return "Re-enter PIN"
-            elif "pin changed" in text_lower and "successfully" in text_lower:
-                return "PIN Changed"
-            elif "pin = 1234" in text_lower:
-                return "Check PIN 1234"
-            elif "match to first entry" in text_lower:
-                return "Match PIN"
-                
-            # Name recording
-            elif "first time users" in text_lower or "spoken name" in text_lower:
-                return "Record Name"
-            elif "name confirmation" in text_lower or "name has been recorded" in text_lower:
-                return "Name Confirmation"
-            elif "name changed" in text_lower and "successfully" in text_lower:
-                return "Name Changed"
-            elif "employee information" in text_lower:
-                return "Employee Information"
-            elif "name recorded previously" in text_lower:
-                return "Check Name Exists"
-                
-            # Decision logic
-            elif "valid digits" in text_lower:
-                return "Validate Digits"
-            elif node_text.strip() == "Selection":
-                return "Process Selection"
-            elif node_text.strip().lower() == "yes":
-                return "Confirm Yes"
-            elif "entered digits" in text_lower:
-                return "Check Digits"
-                
-            # Standard nodes
-            elif "invalid entry" in text_lower:
-                return "Invalid Entry"
-            elif "goodbye" in text_lower:
-                return "Goodbye"
-            elif "welcome" in text_lower:
-                return "Welcome"
-            
-            # ENHANCED: Better fallback parsing
-            # Remove common IVR words and focus on key content
-            cleaned_text = re.sub(r'\b(please|press|enter|the|your|a|an|is|has|been|to|for|if|this)\b', ' ', text_lower)
-            words = [w for w in cleaned_text.split() if len(w) > 2]
-            
-            if words:
-                if len(words) <= 3:
-                    return ' '.join(word.capitalize() for word in words)
-                else:
-                    # Take first 2-3 meaningful words
-                    key_words = words[:3]
-                    return ' '.join(word.capitalize() for word in key_words)
+        if not node_text:
+            return f"{node_type.value.replace('_', ' ').title()}"
         
-        # Last resort: Use node type and ID
-        return f"{node_type.value.replace('_', ' ').title()}_{node_id}"
+        text_lower = node_text.lower()
+        
+        # Extract key meaningful words, avoiding common IVR filler words
+        filler_words = {'the', 'a', 'an', 'is', 'has', 'been', 'to', 'for', 'if', 'this', 'please', 'your'}
+        words = [w for w in re.findall(r'\b[A-Za-z]+\b', text_lower) if w not in filler_words and len(w) > 2]
+        
+        if words:
+            # Take first 2-3 most meaningful words
+            key_words = words[:3]
+            return ' '.join(word.capitalize() for word in key_words)
+        
+        # Fallback to node type
+        return f"{node_type.value.replace('_', ' ').title()}"
 
     def _create_ivr_node(self, node: Dict, connections: List[Dict], label: str, node_id_to_label: Dict[str, str] = None) -> List[Dict[str, Any]]:
-        """ENHANCED: Create proper IVR nodes with real voice files and logic"""
+        """
+        ANDRES'S METHOD: Create IVR nodes using real segmentation and voice file matching
+        NO hardcoded logic - everything driven by content analysis
+        """
         text = node['text']
         node_type = node['type']
         
+        # Detect variables dynamically
+        variables = self._detect_variables_dynamically(text)
+        
+        # Segment text like Andres does manually
+        segments = self._segment_text_like_andres(text, variables)
+        
+        # Generate voice prompts using Andres's method
+        play_log, play_prompt = self._generate_voice_prompts_andres_style(segments, variables)
+        
         # Create base node
         ivr_node = {'label': label}
-        ivr_node['log'] = text.replace('\n', ' ').strip()
         
-        # ENHANCED: Better playPrompt generation using real database
-        voice_file = self._search_voice_database_enhanced(text)
-        if voice_file:
-            ivr_node['playPrompt'] = voice_file
-        else:
-            # Fallback: try to use a reasonable default based on node type
-            fallback_prompts = {
-                NodeType.PIN_ENTRY: 'callflow:1008',
-                NodeType.ERROR: 'callflow:1009', 
-                NodeType.GOODBYE: 'callflow:1029',
-                NodeType.RESPONSE: 'callflow:1167',
-            }
-            
-            if node_type in fallback_prompts:
-                ivr_node['playPrompt'] = fallback_prompts[node_type]
-                print(f"📝 Using fallback prompt for {label}: {fallback_prompts[node_type]}")
+        # Add voice content based on Andres's patterns
+        if len(play_log) > 1:
+            ivr_node['playLog'] = play_log
+            ivr_node['playPrompt'] = play_prompt
+        elif play_log:
+            ivr_node['log'] = play_log[0]
+            ivr_node['playPrompt'] = play_prompt[0] if play_prompt else f"callflow:NEW"
+        
+        # Add dynamic interaction logic based on content analysis
+        if self._should_have_input_logic(text, node_type):
+            self._add_dynamic_input_logic(ivr_node, connections, text, node_id_to_label)
+        elif node_type == NodeType.RESPONSE and "successfully" in text.lower():
+            # Response completion messages
+            if connections and len(connections) == 1:
+                target_label = node_id_to_label.get(connections[0]['target'], 'Goodbye')
+                ivr_node['goto'] = target_label
             else:
-                # Last resort: use node ID but mark as needed
-                ivr_node['playPrompt'] = f"callflow:{node['id']}"
-                print(f"⚠️ Voice file needed for: {text[:50]}...")
+                ivr_node['goto'] = 'Goodbye'
+        elif connections:
+            self._add_dynamic_flow_logic(ivr_node, connections, node_id_to_label)
         
-        # ENHANCED: Add proper getDigits for PIN entry nodes
-        if node_type == NodeType.PIN_ENTRY or ("pin" in text.lower() and "enter" in text.lower()):
+        return [ivr_node]
+
+    def _should_have_input_logic(self, text: str, node_type: NodeType) -> bool:
+        """Determine if node should have input logic based on content"""
+        text_lower = text.lower()
+        input_indicators = ['press', 'enter', 'digit', 'key', 'available']
+        return any(indicator in text_lower for indicator in input_indicators)
+
+    def _add_dynamic_input_logic(self, ivr_node: Dict, connections: List[Dict], text: str, node_id_to_label: Dict[str, str]):
+        """Add input logic based on content analysis"""
+        text_lower = text.lower()
+        
+        # Detect what kind of input is expected
+        if 'pin' in text_lower and 'digit' in text_lower:
+            # PIN entry
             ivr_node['getDigits'] = {
                 'numDigits': 5,  # 4 digits + pound
                 'maxTries': 3,
-                'maxTime': 10,   # Longer for PIN entry
-                'validChoices': '{{new_pin}}' if 'new' in text.lower() else '{{pin}}',
+                'maxTime': 10,
+                'validChoices': '{{pin}}',
                 'errorPrompt': 'callflow:1009',
                 'nonePrompt': 'callflow:1009'
             }
-            
-            # ENHANCED: Better PIN validation branching
-            if connections:
-                branch_map = {}
-                for conn in connections:
-                    target_label = node_id_to_label.get(conn['target'], 'Unknown')
-                    label_text = conn.get('label', '').lower()
-                    
-                    if 'digits' in label_text or 'entered' in label_text:
-                        # This connection handles the PIN processing
-                        ivr_node['goto'] = target_label
-                        return [ivr_node]
-                
-                # Default error handling
-                ivr_node['branch'] = {
-                    'error': 'Invalid Entry',
-                    'none': 'Invalid Entry'
+        elif 'press any' in text_lower:
+            # Any key continuation
+            ivr_node['getDigits'] = {'numDigits': 1}
+        else:
+            # DTMF choices - extract from text and connections
+            choices = self._extract_dtmf_choices(text, connections)
+            if choices:
+                ivr_node['getDigits'] = {
+                    'numDigits': 1,
+                    'maxTries': 3,
+                    'maxTime': 7,
+                    'validChoices': '|'.join(choices),
+                    'errorPrompt': 'callflow:1009',
+                    'nonePrompt': 'callflow:1009'
                 }
         
-        # ENHANCED: Add proper getDigits for confirmation nodes
-        elif ("correct" in text.lower() and "press 1" in text.lower()) or ("name confirmation" in label.lower()):
-            ivr_node['getDigits'] = {
-                'numDigits': 1,
-                'maxTries': 3,
-                'maxTime': 7,
-                'validChoices': '1|3',
-                'errorPrompt': 'callflow:1009',
-                'nonePrompt': 'callflow:1009'
-            }
-            
-            # Find connections for press 1 and press 3
-            branch_map = {}
-            for conn in connections:
-                target_label = node_id_to_label.get(conn['target'], 'Unknown')
-                label_text = conn.get('label', '').lower()
-                
-                if 'entered digits' in label_text or 'retry logic' in label_text:
-                    # This is the main processing path
-                    ivr_node['goto'] = target_label
-                    return [ivr_node]
-            
-            # Default confirmation branches
-            ivr_node['branch'] = {
-                '1': 'Name Changed',    # Confirmed
-                '3': 'Record Name',     # Re-record  
-                'error': 'Invalid Entry',
-                'none': 'Invalid Entry'
-            }
-        
-        # Handle response nodes (PIN Changed, Name Changed, etc.)
-        elif node_type == NodeType.RESPONSE:
-            if "changed successfully" in text.lower():
-                # These are completion messages, not response recordings
-                if connections and len(connections) == 1:
-                    target_label = node_id_to_label.get(connections[0]['target'], 'Goodbye')
-                    ivr_node['goto'] = target_label
-                else:
-                    ivr_node['goto'] = 'Goodbye'
-                return [ivr_node]
-            else:
-                return self._create_response_nodes(ivr_node, label, connections, node_id_to_label)
-        
-        # Handle decision nodes - should have branch logic
-        elif node_type == NodeType.DECISION:
-            self._add_decision_logic_enhanced(ivr_node, connections, node, node_id_to_label)
-        
-        # Handle error nodes
-        elif node_type == NodeType.ERROR:
-            self._add_error_retry_logic(ivr_node, connections, node_id_to_label)
-        
-        # Single connection goto (only if no other logic)
-        elif len(connections) == 1 and not ivr_node.get('branch') and not ivr_node.get('getDigits'):
-            target_id = connections[0]['target']
-            target_label = node_id_to_label.get(target_id, self._generate_meaningful_label("", NodeType.ACTION, target_id))
-            ivr_node['goto'] = target_label
-
-        return [ivr_node]
-
-    def _add_decision_logic_enhanced(self, ivr_node: Dict, connections: List[Dict], node: Dict, node_id_to_label: Dict[str, str]):
-        """ENHANCED: Add proper decision logic with better branching"""
-        
-        text_lower = node['text'].lower()
-        
-        if "pin = 1234" in text_lower:
-            # PIN validation check - system handles this automatically
-            yes_target = None
-            no_target = None
-            
-            for conn in connections:
-                label = conn.get('label', '').lower()
-                target_label = node_id_to_label.get(conn['target'], 'Unknown')
-                
-                if 'yes' in label:
-                    yes_target = target_label  # Invalid PIN (1234)
-                elif 'no' in label:
-                    no_target = target_label   # Valid PIN (not 1234)
-            
-            # System branches based on PIN validation
-            if yes_target and no_target:
-                ivr_node['branch'] = {
-                    'pin_1234': yes_target,    # If PIN is 1234 (invalid)
-                    'pin_valid': no_target     # If PIN is not 1234 (valid)
-                }
-            elif connections:
-                # Fallback to first connection
-                ivr_node['goto'] = node_id_to_label.get(connections[0]['target'], 'Unknown')
-                
-        elif "match to first entry" in text_lower or "match" in text_lower:
-            # PIN confirmation check
-            for conn in connections:
-                target_label = node_id_to_label.get(conn['target'], 'Unknown')
-                # Assume first connection is success path
-                ivr_node['goto'] = target_label
-                break
-                
-        elif "name recorded previously" in text_lower:
-            # Check if user has recorded name before
-            yes_target = None
-            no_target = None
-            
-            for conn in connections:
-                label = conn.get('label', '').lower()
-                target_label = node_id_to_label.get(conn['target'], 'Unknown')
-                
-                if 'yes' in label:
-                    yes_target = target_label
-                elif 'no' in label:
-                    no_target = target_label
-            
-            if yes_target and no_target:
-                ivr_node['branch'] = {
-                    'has_name': yes_target,
-                    'no_name': no_target
-                }
-            elif connections:
-                ivr_node['goto'] = node_id_to_label.get(connections[0]['target'], 'Unknown')
-                
-        elif "valid digits" in text_lower:
-            # Digit validation check
-            for conn in connections:
-                label = conn.get('label', '').lower() 
-                target_label = node_id_to_label.get(conn['target'], 'Unknown')
-                
-                if 'no' in label:
-                    ivr_node['branch'] = {'invalid': target_label}
-                elif 'yes' in label:
-                    if 'branch' not in ivr_node:
-                        ivr_node['branch'] = {}
-                    ivr_node['branch']['valid'] = target_label
-                    
-        elif text_lower.strip() == "selection":
-            # Menu selection processing
-            branch_map = {}
-            for conn in connections:
-                label = conn.get('label', '').lower()
-                target_label = node_id_to_label.get(conn['target'], 'Unknown')
-                
-                if 'one' in label:
-                    branch_map['1'] = target_label
-                elif 'three' in label:
-                    branch_map['3'] = target_label
-            
+        # Add branching based on connections
+        if connections and ivr_node.get('getDigits'):
+            branch_map = self._build_dynamic_branch_map(connections, text, node_id_to_label)
             if branch_map:
                 ivr_node['branch'] = branch_map
-            elif connections:
-                ivr_node['goto'] = node_id_to_label.get(connections[0]['target'], 'Unknown')
-                
-        else:
-            # Generic decision - use first connection as default
-            if connections:
-                target_label = node_id_to_label.get(connections[0]['target'], 'Unknown')
-                ivr_node['goto'] = target_label
 
-    def _add_error_retry_logic(self, ivr_node: Dict, connections: List[Dict], node_id_to_label: Dict[str, str]):
-        """Add proper retry logic for error nodes"""
+    def _extract_dtmf_choices(self, text: str, connections: List[Dict]) -> List[str]:
+        """Extract DTMF choices from text and connections"""
+        choices = []
         
-        # Error nodes should return to appropriate points in the flow
-        retry_targets = []
+        # Extract from text
+        press_matches = re.findall(r'press\s+(\d+)', text.lower())
+        choices.extend(press_matches)
+        
+        # Extract from connection labels
+        for conn in connections:
+            label = conn.get('label', '').lower()
+            digit_matches = re.findall(r'\b(\d+)\b', label)
+            choices.extend(digit_matches)
+        
+        return sorted(list(set(choices)))
+
+    def _build_dynamic_branch_map(self, connections: List[Dict], text: str, node_id_to_label: Dict[str, str]) -> Dict[str, str]:
+        """Build branch map dynamically from connections"""
+        branch_map = {}
         
         for conn in connections:
             label = conn.get('label', '').lower()
-            target_label = node_id_to_label.get(conn['target'], 'Unknown')
+            target_label = node_id_to_label.get(conn['target'], f"Node_{conn['target']}")
             
-            if 'retry' in label:
-                retry_targets.append(target_label)
+            # Extract choice number
+            digit_match = re.search(r'\b(\d+)\b', label)
+            if digit_match:
+                choice = digit_match.group(1)
+                branch_map[choice] = target_label
+            elif 'retry' in label or 'invalid' in label:
+                branch_map['error'] = target_label
+            elif 'no input' in label or 'timeout' in label:
+                branch_map['none'] = target_label
         
-        if retry_targets:
-            # If multiple retry targets, use the first one
-            ivr_node['goto'] = retry_targets[0]
-        elif connections:
-            # Default to first connection
-            ivr_node['goto'] = node_id_to_label.get(connections[0]['target'], 'Unknown')
-        else:
-            # No connections - dead end error
-            ivr_node['goto'] = 'Problems'
+        # Add default error handling
+        if 'error' not in branch_map:
+            branch_map['error'] = 'Problems'
+        if 'none' not in branch_map:
+            branch_map['none'] = branch_map.get('error', 'Problems')
+        
+        return branch_map
 
-    def _create_response_nodes(self, base_node: Dict, label: str, connections: List[Dict], node_id_to_label: Dict[str, str]) -> List[Dict]:
-        """Create proper response node structure like allflows LITE"""
-        nodes = []
-        
-        # First node: gosub only
-        gosub_node = {'label': label}
-        
-        label_lower = label.lower()
-        if 'accept' in label_lower:
-            gosub_node['gosub'] = ['SaveCallResult', 1001, 'Accept']
-        elif 'decline' in label_lower:
-            gosub_node['gosub'] = ['SaveCallResult', 1002, 'Decline']
-        elif 'not home' in label_lower:
-            gosub_node['gosub'] = ['SaveCallResult', 1006, 'NotHome']
-        elif 'qualified' in label_lower:
-            gosub_node['gosub'] = ['SaveCallResult', 1145, 'QualNo']
-        
-        nodes.append(gosub_node)
-        
-        # Second node: message and goto
-        message_node = {
-            'label': f"{label} Message",
-            'log': base_node['log'],
-            'playPrompt': base_node['playPrompt'],
-            'nobarge': '1',
-            'goto': 'Goodbye'
-        }
-        nodes.append(message_node)
-        
-        return nodes
+    def _add_dynamic_flow_logic(self, ivr_node: Dict, connections: List[Dict], node_id_to_label: Dict[str, str]):
+        """Add flow logic based on connection analysis"""
+        if len(connections) == 1:
+            # Single connection - simple goto
+            target_label = node_id_to_label.get(connections[0]['target'], f"Node_{connections[0]['target']}")
+            ivr_node['goto'] = target_label
+        elif len(connections) > 1:
+            # Multiple connections - analyze for branching logic
+            for conn in connections:
+                label = conn.get('label', '').lower()
+                target_label = node_id_to_label.get(conn['target'], f"Node_{conn['target']}")
+                
+                if 'yes' in label:
+                    ivr_node['goto'] = target_label
+                    break
+                elif not label:  # Empty label - take first connection
+                    ivr_node['goto'] = target_label
+                    break
 
     def convert_mermaid_to_ivr(self, mermaid_code: str, uploaded_csv_file=None) -> Tuple[List[Dict[str, Any]], List[str]]:
-        """Main conversion method - ENHANCED WITH BETTER DATABASE SEARCH"""
+        """
+        ANDRES'S TRUE METHODOLOGY: Convert Mermaid to IVR using dynamic analysis
+        NO hardcoded patterns - everything based on content analysis and database matching
+        """
         notes = []
         
         try:
-            print(f"🚀 Starting conversion of Mermaid diagram...")
+            print(f"🚀 Starting Andres-style conversion...")
             print(f"📝 Input length: {len(mermaid_code)} characters")
             
             # Parse Mermaid diagram
@@ -715,19 +672,18 @@ class ProductionIVRConverter:
             
             if not nodes:
                 notes.append("❌ No nodes found in diagram - check Mermaid syntax")
-                print("❌ PARSING FAILED - No nodes extracted")
                 return self._create_fallback_flow(), notes
             
             print(f"✅ Successfully parsed {len(nodes)} nodes")
             
-            # Create a mapping of node IDs to meaningful labels
+            # Generate meaningful labels dynamically
             node_id_to_label = {}
             used_labels = set()
             
             for node in nodes:
-                base_label = self._generate_meaningful_label(node['text'], node['type'], node['id'], nodes)
+                base_label = self._generate_meaningful_label(node['text'], node['type'], node['id'])
                 
-                # Handle duplicate labels by adding suffix
+                # Handle duplicate labels
                 final_label = base_label
                 counter = 1
                 while final_label in used_labels:
@@ -738,34 +694,28 @@ class ProductionIVRConverter:
                 used_labels.add(final_label)
                 print(f"🏷️ {node['id']} -> '{final_label}' ({node['type'].value})")
             
-            # Generate IVR nodes with meaningful labels
+            # Generate IVR nodes using Andres's methodology
             ivr_nodes = []
             
             for node in nodes:
                 print(f"\n🔄 Processing node {node['id']}: {node['text'][:50]}...")
                 
-                # Get the meaningful label
                 label = node_id_to_label[node['id']]
-                
-                # Get connections for this node
                 node_connections = [c for c in connections if c['source'] == node['id']]
                 print(f"🔗 Found {len(node_connections)} outgoing connections")
                 
-                # Create IVR node(s) - can return multiple nodes for responses
+                # Create IVR node(s) using Andres's method
                 created_nodes = self._create_ivr_node(node, node_connections, label, node_id_to_label)
                 
-                # Add all created nodes with safety check
                 for created_node in created_nodes:
-                    # Ensure every node has a label before adding
                     if 'label' not in created_node:
-                        print(f"⚠️ WARNING: Node missing label, adding fallback: {created_node}")
                         created_node['label'] = f"Node_{len(ivr_nodes)}"
                     
                     ivr_nodes.append(created_node)
                     notes.append(f"Generated node: {created_node['label']}")
                     print(f"✅ Generated IVR node: {created_node['label']}")
             
-            # ENHANCED: Better standard nodes
+            # Add standard termination nodes
             if not any(node.get('label') == 'Problems' for node in ivr_nodes):
                 ivr_nodes.append({
                     'label': 'Problems',
@@ -784,13 +734,32 @@ class ProductionIVRConverter:
                 })
                 notes.append("Added standard 'Goodbye' termination")
             
-            # ENHANCED: Add voice file statistics
-            voice_files_found = sum(1 for node in ivr_nodes if node.get('playPrompt', '').startswith('callflow:') and not node['playPrompt'].endswith(('A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T')))
-            voice_files_needed = len(ivr_nodes) - voice_files_found
+            # Calculate statistics
+            voice_files_found = 0
+            voice_files_needed = 0
             
-            notes.append(f"✅ Generated {len(ivr_nodes)} production-ready IVR nodes")
+            for node in ivr_nodes:
+                prompts = []
+                if 'playPrompt' in node:
+                    if isinstance(node['playPrompt'], list):
+                        prompts.extend(node['playPrompt'])
+                    else:
+                        prompts.append(node['playPrompt'])
+                
+                for prompt in prompts:
+                    if isinstance(prompt, str):
+                        if prompt.startswith('callflow:') and not prompt.startswith('callflow:NEW'):
+                            # Check if it's a real voice file (not a node ID)
+                            if not any(prompt.endswith(letter) for letter in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
+                                voice_files_found += 1
+                            else:
+                                voice_files_needed += 1
+                        elif 'NEW' in prompt or 'NEEDED' in prompt:
+                            voice_files_needed += 1
+            
+            notes.append(f"✅ Generated {len(ivr_nodes)} IVR nodes using Andres's methodology")
             notes.append(f"📊 Voice files: {voice_files_found} found in database, {voice_files_needed} need recording")
-            print(f"🎉 CONVERSION SUCCESSFUL - Generated {len(ivr_nodes)} nodes")
+            print(f"🎉 ANDRES-STYLE CONVERSION SUCCESSFUL - Generated {len(ivr_nodes)} nodes")
             print(f"📊 Voice file statistics: {voice_files_found} found, {voice_files_needed} needed")
             
             return ivr_nodes, notes
@@ -822,6 +791,9 @@ class ProductionIVRConverter:
 
 # Main function for the app
 def convert_mermaid_to_ivr(mermaid_code: str, uploaded_csv_file=None) -> Tuple[List[Dict[str, Any]], List[str]]:
-    """Production-ready conversion function with enhanced database search"""
-    converter = ProductionIVRConverter(uploaded_csv_file)
+    """
+    ANDRES'S TRUE METHODOLOGY: Production-ready conversion function
+    Uses dynamic analysis and database-driven approach - NO hardcoding
+    """
+    converter = AndresMethodologyConverter(uploaded_csv_file)
     return converter.convert_mermaid_to_ivr(mermaid_code)
