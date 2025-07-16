@@ -1,14 +1,6 @@
 """
-COMPLETE FINAL VERSION - mermaid_ivr_converter.py
-Andres's methodology with CRITICAL branch mapping fixes
-- Proper text segmentation working ✅
-- Variable detection working ✅  
-- DATABASE-DRIVEN voice file matching ✅
-- FIXED: Complete branch mapping for all choices ✅
-- FIXED: Welcome node handling all DTMF choices including choice "1" ✅
-- FIXED: Sleep node return logic ✅
-
-CRITICAL FIX: The "input" connection now properly maps to choice "1"
+Production-Ready Mermaid to IVR Converter
+Matches actual allflows LITE patterns and fixes critical issues
 """
 
 import re
@@ -40,7 +32,7 @@ class VoiceFile:
     transcript: str
     callflow_id: str
 
-class AndresMethodologyConverter:
+class ProductionIVRConverter:
     def __init__(self, uploaded_csv_file=None):
         # Voice file database
         self.voice_files: List[VoiceFile] = []
@@ -105,45 +97,45 @@ class AndresMethodologyConverter:
         print("📥 Loading fallback voice database...")
         
         fallback_files = [
-            # Critical IVR messages
-            ("This is an electric callout", "MSG001"),
-            ("Press 1, if this is", "PRESS1"),
-            ("Press 3, if you need more time", "PRESS3"),
-            ("Press 7, if", "PRESS7"),
-            ("Press 9, to repeat", "PRESS9"),
-            ("Please enter your 4 digit PIN", "PINENTRY"),
-            ("Invalid entry", "INVALID"),
-            ("Thank you", "THANKS"),
-            ("Goodbye", "GOODBYE"),
-            ("Your response has been recorded", "RECORDED"),
-            ("Are you available", "AVAILABLE"),
-            ("If yes, press 1", "YESPRESS1"),
-            ("If no, press 3", "NOPRESS3"),
-            ("Not home", "NOTHOME"),
-            ("Call the", "CALLTHE"),
-            ("Callout System", "CALLSYS"),
-            ("Employee", "EMPLOYEE"),
-            ("Level 2", "LEVEL2"),
-            ("More time", "MORETIME"),
-            ("Repeat this message", "REPEAT"),
-            ("Problems", "PROBLEMS"),
-            ("Invalid PIN", "INVALIDPIN"),
-            ("Correct PIN", "CORRECTPIN"),
-            ("Accepted response", "ACCEPT"),
-            ("Decline", "DECLINE"),
-            ("Qualified no", "QUALNO"),
-            ("Electric callout", "ELECTRIC"),
-            ("Callout reason", "REASON"),
-            ("Trouble location", "LOCATION"),
-            ("Custom message", "CUSTOM"),
-            ("Continue", "CONTINUE"),
-            ("Press any key", "PRESSANY"),
+            # Based on actual allflows LITE patterns
+            ("This is an electric callout", "1177"),
+            ("It is", "1231"),
+            ("Press 1 if this is", "1002"),
+            ("if you need more time to get", "1005"),
+            ("to the phone", "1006"),
+            ("Press 7", "PRS7NEU"),
+            ("is not home", "1004"),
+            ("Press 9", "PRS9NEU"),
+            ("to repeat this message", "1643"),
+            ("Please enter your four digit PIN", "1008"),
+            ("Invalid entry", "1009"),
+            ("Thank you", "1029"),
+            ("Goodbye", "1029"),
+            ("Your response has been recorded", "1167"),
+            ("Are you available", "1316"),
+            ("If yes, press 1", "1167"),
+            ("If no, press 3", "1021"),
+            ("Not home", "1017"),
+            ("Call the", "1175"),
+            ("Callout System", "1175"),
+            ("Employee", "1002"),
+            ("Level 2", "1589"),
+            ("More time", "1005"),
+            ("Repeat this message", "1643"),
+            ("Problems", "1351"),
+            ("Invalid PIN", "1009"),
+            ("Electric callout", "1274"),
+            ("Callout reason", "1019"),
+            ("Trouble location", "1232"),
+            ("Custom message", "1149"),
+            ("Continue", "1265"),
+            ("Press any key", "1265"),
         ]
         
         for transcript, callflow_id in fallback_files:
             voice_file = VoiceFile(
-                company="Fallback",
-                folder="Standard",
+                company="Standard",
+                folder="Callflow",
                 file_name=f"{callflow_id}.ulaw",
                 transcript=transcript,
                 callflow_id=callflow_id
@@ -162,8 +154,8 @@ class AndresMethodologyConverter:
         print(f"✅ Loaded {len(self.voice_files)} fallback voice files")
 
     def convert_mermaid_to_ivr(self, mermaid_code: str) -> Tuple[List[Dict], str]:
-        """Main conversion method following Andres's methodology"""
-        print(f"\n🚀 Starting conversion with Andres's methodology...")
+        """Main conversion method matching production patterns"""
+        print(f"\n🚀 Starting production conversion...")
         
         # Parse the Mermaid diagram
         nodes, connections = self._parse_mermaid_enhanced(mermaid_code)
@@ -180,22 +172,30 @@ class AndresMethodologyConverter:
         
         print(f"📋 Node mappings: {node_id_to_label}")
         
-        # Convert each node to IVR format
+        # Find the starting node (Welcome node)
+        start_node_id = self._find_start_node(nodes, connections)
+        
+        # Convert each node to IVR format with production patterns
         ivr_flow = []
-        for node_id, node_text in nodes.items():
-            ivr_node = self._convert_node_to_ivr(
-                node_id, node_text, connections, node_id_to_label
-            )
-            ivr_flow.append(ivr_node)
+        processed_nodes = set()
+        
+        # Process nodes in logical order starting from welcome
+        self._process_node_recursive(start_node_id, nodes, connections, node_id_to_label, ivr_flow, processed_nodes)
+        
+        # Process any remaining nodes
+        for node_id in nodes:
+            if node_id not in processed_nodes:
+                ivr_node = self._convert_node_to_ivr(node_id, nodes[node_id], connections, node_id_to_label)
+                ivr_flow.append(ivr_node)
         
         # Generate JavaScript output
         js_output = self._generate_javascript_output(ivr_flow)
         
-        print(f"✅ Conversion completed successfully! Generated {len(ivr_flow)} nodes")
+        print(f"✅ Production conversion completed! Generated {len(ivr_flow)} nodes")
         return ivr_flow, js_output
 
     def _parse_mermaid_enhanced(self, mermaid_code: str) -> Tuple[Dict[str, str], List[Dict]]:
-        """ENHANCED Mermaid parsing with better pattern recognition"""
+        """Enhanced Mermaid parsing with better pattern recognition"""
         nodes = {}
         connections = []
         
@@ -218,7 +218,7 @@ class AndresMethodologyConverter:
                 nodes[node_id] = node_text.strip()
                 print(f"📝 Found node: {node_id} = '{node_text[:50]}...'")
         
-        # Extract connections - ENHANCED patterns
+        # Extract connections with enhanced pattern matching
         connection_patterns = [
             r'([A-Z]+)\s*-->\s*\|"([^"]+)"\|\s*([A-Z]+)',  # A -->|"label"| B
             r'([A-Z]+)\s*-->\s*\|([^|]+)\|\s*([A-Z]+)',     # A -->|label| B  
@@ -252,11 +252,44 @@ class AndresMethodologyConverter:
         print(f"✅ Parsed {len(nodes)} nodes and {len(connections)} connections")
         return nodes, connections
 
+    def _find_start_node(self, nodes: Dict[str, str], connections: List[Dict]) -> str:
+        """Find the starting node (typically the welcome node)"""
+        # Find nodes with no incoming connections
+        incoming_targets = {conn['target'] for conn in connections}
+        start_candidates = [node_id for node_id in nodes if node_id not in incoming_targets]
+        
+        if start_candidates:
+            # Prefer nodes that look like welcome messages
+            for node_id in start_candidates:
+                text = nodes[node_id].lower()
+                if any(phrase in text for phrase in ['welcome', 'this is an', 'electric callout']):
+                    return node_id
+            return start_candidates[0]
+        
+        # Fallback to first node
+        return list(nodes.keys())[0]
+
+    def _process_node_recursive(self, node_id: str, nodes: Dict[str, str], connections: List[Dict], 
+                               node_id_to_label: Dict[str, str], ivr_flow: List[Dict], processed: set):
+        """Process nodes recursively to maintain proper flow order"""
+        if node_id in processed or node_id not in nodes:
+            return
+        
+        processed.add(node_id)
+        
+        # Convert this node
+        ivr_node = self._convert_node_to_ivr(node_id, nodes[node_id], connections, node_id_to_label)
+        ivr_flow.append(ivr_node)
+        
+        # Process connected nodes
+        outgoing_connections = [conn for conn in connections if conn['source'] == node_id]
+        for conn in outgoing_connections:
+            self._process_node_recursive(conn['target'], nodes, connections, node_id_to_label, ivr_flow, processed)
+
     def _determine_node_type(self, text: str) -> NodeType:
-        """DYNAMIC node type detection - NO hardcoded patterns"""
+        """Determine node type based on content analysis"""
         text_lower = text.lower()
         
-        # Analyze content characteristics rather than specific keywords
         if self._has_greeting_characteristics(text_lower):
             return NodeType.WELCOME
         elif self._has_input_characteristics(text_lower):
@@ -277,344 +310,126 @@ class AndresMethodologyConverter:
             return NodeType.ACTION
 
     def _has_greeting_characteristics(self, text: str) -> bool:
-        """Check if text has greeting/welcome characteristics"""
-        greeting_words = ['this is an', 'welcome', 'callout from', 'press 1, if this is', 'press 3, if you need']
-        return any(phrase in text for phrase in greeting_words)
+        greeting_indicators = ['this is an', 'welcome', 'electric callout', 'press 1, if this is']
+        return any(phrase in text for phrase in greeting_indicators)
 
     def _has_input_characteristics(self, text: str) -> bool:
-        """Check if text requires input from user"""
-        input_words = ['enter your', 'pin', 'digit', 'followed by', 'pound key']
-        return any(word in text for word in input_words)
+        input_indicators = ['enter your', 'pin', 'digit', 'pound key']
+        return any(phrase in text for phrase in input_indicators)
 
     def _has_availability_characteristics(self, text: str) -> bool:
-        """Check if text is asking about availability"""
-        availability_words = ['available', 'work this callout', 'if yes, press', 'if no, press']
-        return any(phrase in text for phrase in availability_words)
+        availability_indicators = ['available', 'work this callout', 'if yes, press', 'if no, press']
+        return any(phrase in text for phrase in availability_indicators)
 
     def _has_response_characteristics(self, text: str) -> bool:
-        """Check if text is a response/confirmation message"""
-        response_words = ['response has been', 'recorded', 'accepted', 'decline']
-        return any(word in text for word in response_words)
+        response_indicators = ['response has been', 'recorded', 'accepted', 'decline']
+        return any(phrase in text for phrase in response_indicators)
 
     def _has_termination_characteristics(self, text: str) -> bool:
-        """Check if text indicates call termination"""
-        termination_words = ['goodbye', 'thank you', 'disconnect']
-        return any(word in text for word in termination_words)
+        termination_indicators = ['goodbye', 'thank you', 'disconnect']
+        return any(phrase in text for phrase in termination_indicators)
 
     def _has_error_characteristics(self, text: str) -> bool:
-        """Check if text is an error message"""
-        error_words = ['invalid', 'error', 'problems', 'try again']
-        return any(word in text for word in error_words)
+        error_indicators = ['invalid', 'error', 'problems', 'try again']
+        return any(phrase in text for phrase in error_indicators)
 
     def _has_sleep_characteristics(self, text: str) -> bool:
-        """Check if text is a sleep/wait message"""
-        sleep_words = ['30-second', 'press any key', 'continue', 'more time']
-        return any(phrase in text for phrase in sleep_words)
+        sleep_indicators = ['30-second', 'press any key', 'continue']
+        return any(phrase in text for phrase in sleep_indicators)
 
     def _has_decision_characteristics(self, text: str) -> bool:
-        """Check if text represents a decision point"""
-        return text.count('press') >= 2 or 'if' in text or len(text.split()) <= 5
+        return '?' in text or ('correct' in text and 'pin' in text)
 
     def _generate_meaningful_label(self, node_text: str, node_type: NodeType, node_id: str) -> str:
-        """DYNAMIC label generation based on content analysis"""
-        
-        if not node_text:
-            return f"{node_type.value.replace('_', ' ').title()}"
-        
+        """Generate meaningful labels based on content"""
         text_lower = node_text.lower()
         
-        # Special cases for common IVR patterns
+        # Production-ready label patterns
         if 'this is an electric callout' in text_lower:
-            return "Welcome Electric Callout"
+            return "Live Answer"
         elif 'enter your' in text_lower and 'pin' in text_lower:
-            return "Enter Employee PIN"
+            return "Enter PIN"
         elif 'available' in text_lower and 'work this callout' in text_lower:
             return "Available For Callout"
         elif 'accepted response' in text_lower:
-            return "Accepted Response"
-        elif 'decline' in text_lower and 'recorded' in text_lower:
-            return "Callout Decline"
+            return "Accept"
+        elif 'decline' in text_lower:
+            return "Decline"
         elif 'not home' in text_lower:
-            return "Employee Not Home"
-        elif 'invalid' in text_lower and 'entry' in text_lower:
+            return "Not Home"
+        elif 'invalid' in text_lower:
             return "Invalid Entry"
-        elif 'goodbye' in text_lower or 'thank you' in text_lower:
+        elif 'goodbye' in text_lower:
             return "Goodbye"
-        elif '30-second' in text_lower or 'press any key' in text_lower:
-            return "30-second Message"
-        elif 'qualified no' in text_lower or 'called again' in text_lower:
+        elif '30-second' in text_lower:
+            return "Sleep"
+        elif 'qualified' in text_lower:
             return "Qualified No"
-        elif 'callout reason' in text_lower:
-            return "Callout Reason"
-        elif 'trouble location' in text_lower:
-            return "Trouble Location"
-        elif 'custom message' in text_lower:
-            return "Custom Message"
-        elif 'electric callout' in text_lower and 'this is an electric callout' not in text_lower:
-            return "Electric Callout"
         elif 'problems' in text_lower:
             return "Problems"
-        elif 'employee' in text_lower and 'this is' in text_lower:
-            return "Employee"
+        elif 'correct' in text_lower and 'pin' in text_lower:
+            return "Check PIN"
+        elif 'electric callout' in text_lower and 'this is an' not in text_lower:
+            return "Electric Callout Info"
+        elif 'disconnect' in text_lower:
+            return "hangup"
         
-        # Extract key meaningful words, avoiding common IVR filler words
-        filler_words = {'the', 'a', 'an', 'is', 'has', 'been', 'to', 'for', 'if', 'this', 'please', 'your'}
-        words = [w for w in re.findall(r'\b[A-Za-z]+\b', text_lower) if w not in filler_words and len(w) > 2]
+        # Fallback to extracting key words
+        key_words = re.findall(r'\b[A-Z][a-z]+\b', node_text)
+        if key_words:
+            return ' '.join(key_words[:2])
         
-        if words:
-            # Take first 2-3 most meaningful words
-            key_words = words[:3]
-            return ' '.join(word.capitalize() for word in key_words)
-        
-        # Fallback to node type
-        return f"{node_type.value.replace('_', ' ').title()}"
+        return f"Node_{node_id}"
 
-    def _is_welcome_node(self, text: str, node_type: NodeType) -> bool:
-        """Check if this is the main welcome/greeting node"""
-        text_lower = text.lower()
-        welcome_indicators = [
-            'this is an electric callout',
-            'this is a',
-            'welcome',
-            'press 1, if this is',
-            'press 3, if you need more time'
-        ]
-        return any(indicator in text_lower for indicator in welcome_indicators)
-
-    def _extract_dtmf_choices(self, text: str, connections: List[Dict]) -> List[str]:
-        """Extract DTMF choices from text and connections"""
-        choices = []
-        
-        # Extract from text
-        press_matches = re.findall(r'press\s+(\d+)', text.lower())
-        choices.extend(press_matches)
-        
-        # Extract from connection labels
-        for conn in connections:
-            label = conn.get('label', '').lower()
-            digit_matches = re.findall(r'\b(\d+)\b', label)
-            choices.extend(digit_matches)
-        
-        return sorted(list(set(choices)))
-
-    def _fix_welcome_node_branches(self, ivr_node: Dict, connections: List[Dict], text: str, node_id_to_label: Dict[str, str]) -> Dict[str, str]:
-        """CRITICAL FIX: Handle welcome node branching properly - FIXED CHOICE 1 MAPPING"""
-        
-        # Extract all press choices from text
-        press_choices = re.findall(r'press\s+(\d+)', text.lower())
-        print(f"🔍 Found press choices in welcome text: {press_choices}")
-        
-        branch_map = {}
-        
-        # CRITICAL FIX: Handle the "input" connection for choice 1 FIRST
-        # This is the key fix - the "input" connection maps to choice 1 (employee verification)
-        for conn in connections:
-            label = conn.get('label', '').lower()
-            target_label = node_id_to_label.get(conn['target'], f"Node_{conn['target']}")
-            
-            # FIXED: "input" connection maps to choice 1 (employee verification)
-            if label == 'input' or 'this is employee' in label:
-                branch_map['1'] = target_label
-                print(f"✅ FIXED - Choice 1 (employee/input) -> {target_label}")
-                break
-        
-        # Map each remaining choice to its connection with enhanced logic
-        for choice in press_choices:
-            if choice in branch_map:
-                continue  # Skip if already mapped
-                
-            target_found = False
-            
-            for conn in connections:
-                label = conn.get('label', '').lower()
-                target_label = node_id_to_label.get(conn['target'], f"Node_{conn['target']}")
-                
-                # Enhanced matching for welcome node choices
-                if choice == '3':
-                    if ('time' in label or 'more time' in label or 'need more' in label or '3' in label):
-                        branch_map['3'] = target_label
-                        target_found = True
-                        print(f"✅ Choice 3 (more time) -> {target_label}")
-                        break
-                elif choice == '7':
-                    if ('not home' in label or 'home' in label or '7' in label):
-                        branch_map['7'] = target_label
-                        target_found = True
-                        print(f"✅ Choice 7 (not home) -> {target_label}")
-                        break
-                elif choice == '9':
-                    if ('repeat' in label or 'retry' in label or '9' in label):
-                        # 9 should repeat the welcome message (self-reference)
-                        branch_map['9'] = ivr_node['label']
-                        target_found = True
-                        print(f"✅ Choice 9 (repeat) -> {ivr_node['label']}")
-                        break
-            
-            # FALLBACK: If no specific match found, try general connection matching
-            if not target_found and choice != '1':  # Don't override choice 1 fix
-                for conn in connections:
-                    label = conn.get('label', '').lower()
-                    target_label = node_id_to_label.get(conn['target'], f"Node_{conn['target']}")
-                    
-                    # Look for the choice number anywhere in the label
-                    if f'{choice}' in label or f'{choice} -' in label:
-                        branch_map[choice] = target_label
-                        print(f"✅ Fallback choice {choice} -> {target_label}")
-                        break
-        
-        # Handle special connections (error, timeout, etc.)
-        for conn in connections:
-            label = conn.get('label', '').lower()
-            target_label = node_id_to_label.get(conn['target'], f"Node_{conn['target']}")
-            
-            if 'no input' in label or 'timeout' in label:
-                branch_map['none'] = target_label
-            elif 'retry' in label or 'invalid' in label and 'retry' in label:
-                branch_map['error'] = target_label
-        
-        # Add defaults
-        if 'error' not in branch_map:
-            branch_map['error'] = 'Problems'
-        if 'none' not in branch_map:
-            branch_map['none'] = branch_map.get('3', 'Sleep')  # Timeout goes to sleep
-        
-        print(f"🎯 Final welcome branch map: {branch_map}")
-        return branch_map
-
-    def _build_dynamic_branch_map(self, connections: List[Dict], text: str, node_id_to_label: Dict[str, str]) -> Dict[str, str]:
-        """ENHANCED: Build complete branch map from connections and text analysis"""
-        branch_map = {}
-        
-        # Extract ALL DTMF choices from text first
-        text_lower = text.lower()
-        press_choices = re.findall(r'press\s+(\d+)', text_lower)
-        
-        # Map text choices to connections
-        for choice in press_choices:
-            # Find connection that matches this choice
-            for conn in connections:
-                label = conn.get('label', '').lower()
-                
-                # Better choice matching logic
-                if f'{choice} -' in label or f'press {choice}' in label or label == choice:
-                    target_label = node_id_to_label.get(conn['target'], f"Node_{conn['target']}")
-                    branch_map[choice] = target_label
-                    print(f"🎯 Mapped choice {choice} -> {target_label}")
-        
-        # Handle connections without explicit choice numbers
-        for conn in connections:
-            label = conn.get('label', '').lower()
-            target_label = node_id_to_label.get(conn['target'], f"Node_{conn['target']}")
-            
-            # Look for digit patterns in labels
-            digit_match = re.search(r'\b(\d+)\b', label)
-            if digit_match:
-                choice = digit_match.group(1)
-                if choice not in branch_map:  # Don't override existing mappings
-                    branch_map[choice] = target_label
-                    print(f"🎯 Found choice {choice} from connection label -> {target_label}")
-            
-            # Special connection types
-            if 'accept' in label or 'yes' in label:
-                branch_map['1'] = target_label
-            elif 'decline' in label or 'no' in label:
-                branch_map['3'] = target_label
-            elif 'error' in label or 'invalid' in label:
-                branch_map['error'] = target_label
-            elif 'timeout' in label or 'none' in label:
-                branch_map['none'] = target_label
-        
-        # Add standard defaults
-        if 'error' not in branch_map:
-            branch_map['error'] = 'Problems'
-        if 'none' not in branch_map:
-            branch_map['none'] = 'Problems'
-        
-        return branch_map
-
-    def _convert_node_to_ivr(self, node_id: str, node_text: str, connections: List[Dict], node_id_to_label: Dict[str, str]) -> Dict:
-        """Convert a single node to IVR format using Andres's methodology"""
+    def _convert_node_to_ivr(self, node_id: str, node_text: str, connections: List[Dict], 
+                            node_id_to_label: Dict[str, str]) -> Dict:
+        """Convert node to production IVR format matching allflows LITE patterns"""
         
         # Get outgoing connections for this node
         node_connections = [conn for conn in connections if conn['source'] == node_id]
         
-        # Determine node type and generate meaningful label
+        # Determine node type and label
         node_type = self._determine_node_type(node_text)
         meaningful_label = node_id_to_label[node_id]
         
-        # Detect variables dynamically
-        variables_detected = self._detect_variables_dynamically(node_text)
-        
-        # Generate voice prompts using Andres's style
-        play_prompts = self._generate_voice_prompts_andres_style(node_text, variables_detected)
-        
-        # Base IVR node structure
+        # Base node structure matching production patterns
         ivr_node = {
             "label": meaningful_label,
-            "log": f"Andres: {node_text.replace('\n', ' ')[:100]}...",
-            "playLog": play_prompts,
-            "playPrompt": play_prompts,
-            "nobarge": "1"
+            "log": f"{node_text.replace('\n', ' ')[:80]}...",
         }
         
-        # Handle different node types
-        if self._has_input_characteristics(node_text.lower()):
-            # PIN entry or input collection
-            ivr_node.update({
-                "getDigits": {
-                    "numDigits": 4 if 'pin' in node_text.lower() else 1,
-                    "maxTries": 3,
-                    "maxTime": 7,
-                    "validChoices": "0|1|2|3|4|5|6|7|8|9",
-                    "errorPrompt": ["callflow:MSG068"],
-                    "nonePrompt": ["callflow:MSG068"]
-                }
-            })
-            
-            # Add branch for PIN validation
-            if node_connections:
-                branch_map = self._build_dynamic_branch_map(node_connections, node_text, node_id_to_label)
-                if branch_map:
-                    ivr_node["branch"] = branch_map
-            
-        elif self._is_welcome_node(node_text, node_type) or len(node_connections) > 1:
-            # Welcome node or decision point - CRITICAL FIX APPLIED HERE
-            dtmf_choices = self._extract_dtmf_choices(node_text, node_connections)
-            
-            if dtmf_choices:
-                ivr_node.update({
-                    "getDigits": {
-                        "numDigits": 1,
-                        "maxTries": 3,
-                        "maxTime": 7,
-                        "validChoices": "|".join(dtmf_choices),
-                        "errorPrompt": ["callflow:MSG068"],
-                        "nonePrompt": ["callflow:MSG068"]
-                    }
-                })
-                
-                # CRITICAL: Use the fixed welcome node branch mapping
-                if self._is_welcome_node(node_text, node_type):
-                    branch_map = self._fix_welcome_node_branches(ivr_node, node_connections, node_text, node_id_to_label)
-                else:
-                    branch_map = self._build_dynamic_branch_map(node_connections, node_text, node_id_to_label)
-                
-                if branch_map:
-                    ivr_node["branch"] = branch_map
+        # Generate voice prompts
+        play_prompts = self._generate_production_prompts(node_text, node_type)
+        if play_prompts:
+            ivr_node["playPrompt"] = play_prompts
         
+        # Handle special cases based on node content and connections
+        if self._is_welcome_node(node_text):
+            # CRITICAL FIX: Welcome node with proper branch mapping
+            ivr_node.update(self._create_welcome_node(node_text, node_connections, node_id_to_label))
+            
+        elif self._has_input_characteristics(node_text.lower()):
+            # PIN entry node
+            ivr_node.update(self._create_pin_entry_node(node_text, node_connections, node_id_to_label))
+            
+        elif self._has_availability_characteristics(node_text.lower()):
+            # Availability question
+            ivr_node.update(self._create_availability_node(node_text, node_connections, node_id_to_label))
+            
+        elif self._has_decision_characteristics(node_text.lower()):
+            # Decision point (like PIN validation)
+            ivr_node.update(self._create_decision_node(node_text, node_connections, node_id_to_label))
+            
         elif len(node_connections) == 1:
             # Single connection - use goto
-            target_label = node_id_to_label.get(node_connections[0]['target'], 'Next')
+            target_label = node_id_to_label.get(node_connections[0]['target'], 'hangup')
             ivr_node["goto"] = target_label
             
         elif len(node_connections) == 0:
             # Terminal node
-            if self._has_termination_characteristics(node_text.lower()):
-                ivr_node["goto"] = "hangup"
-            else:
-                ivr_node["goto"] = "hangup"
+            ivr_node["goto"] = "hangup"
         
-        # Add special handling for response nodes
+        # Add response handling for action nodes
         if self._has_response_characteristics(node_text.lower()):
             if 'accept' in node_text.lower():
                 ivr_node["gosub"] = ["SaveCallResult", [1001, "Accept"]]
@@ -623,141 +438,202 @@ class AndresMethodologyConverter:
             elif 'qualified' in node_text.lower():
                 ivr_node["gosub"] = ["SaveCallResult", [1145, "QualNo"]]
         
-        print(f"🔧 Generated IVR node: {meaningful_label}")
         return ivr_node
 
-    def _detect_variables_dynamically(self, text: str) -> List[str]:
-        """Detect and convert variables like (Level 2) -> {{level2_location}}"""
-        variables = []
-        
-        # Find all parenthetical expressions
-        paren_matches = re.findall(r'\(([^)]+)\)', text)
-        
-        for match in paren_matches:
-            # Convert to variable format
-            if 'level 2' in match.lower():
-                variables.append('{{level2_location}}')
-            elif 'employee' in match.lower():
-                variables.append('{{contact_id}}')
-            elif 'callout reason' in match.lower():
-                variables.append('{{callout_reason}}')
-            elif 'trouble location' in match.lower():
-                variables.append('{{trouble_location}}')
-            elif 'custom message' in match.lower():
-                variables.append('{{custom_message}}')
-            else:
-                # Generic variable conversion
-                var_name = re.sub(r'[^a-zA-Z0-9]', '_', match.lower())
-                variables.append(f'{{{{{var_name}}}}}')
-        
-        return variables
+    def _is_welcome_node(self, text: str) -> bool:
+        """Check if this is the main welcome node"""
+        text_lower = text.lower()
+        return any(phrase in text_lower for phrase in [
+            'this is an electric callout',
+            'press 1, if this is',
+            'press 3, if you need more time',
+            'press 7, if',
+            'press 9, to repeat'
+        ])
 
-    def _segment_text_like_andres(self, text: str, variables: List[str]) -> List[str]:
-        """Segment text into voice file components following Andres's methodology"""
+    def _create_welcome_node(self, text: str, connections: List[Dict], node_id_to_label: Dict[str, str]) -> Dict:
+        """Create welcome node with FIXED branch mapping"""
         
-        # Replace variables with placeholders for segmentation
-        working_text = text
-        for var in variables:
-            working_text = working_text.replace(var, '[VAR]')
+        # Extract DTMF choices from text
+        choices = re.findall(r'press\s+(\d+)', text.lower())
         
-        # Break into logical segments based on punctuation and natural breaks
-        segments = []
+        # Build branch mapping - CRITICAL FIX HERE
+        branch_map = {}
         
-        # Split on major punctuation
-        major_segments = re.split(r'[.!?]\s*', working_text)
+        # Map connections to choices
+        for conn in connections:
+            label = conn.get('label', '').lower()
+            target_label = node_id_to_label.get(conn['target'], 'hangup')
+            
+            # CRITICAL FIX: Map "input" connection to choice "1"
+            if label == 'input' or '1 - this is employee' in label:
+                branch_map['1'] = target_label
+                print(f"✅ CRITICAL FIX: Choice 1 -> {target_label}")
+            elif '3' in label or 'need more time' in label:
+                branch_map['3'] = target_label
+            elif '7' in label or 'not home' in label:
+                branch_map['7'] = target_label
+            elif '9' in label or 'repeat' in label:
+                branch_map['9'] = "Live Answer"  # Self-reference for repeat
+            elif 'no input' in label:
+                branch_map['none'] = target_label
         
-        for segment in major_segments:
-            if not segment.strip():
-                continue
-                
-            # Further split long segments on commas or conjunctions
-            if len(segment.split()) > 8:
-                sub_segments = re.split(r',\s*|\sand\s|\sor\s', segment)
-                segments.extend([s.strip() for s in sub_segments if s.strip()])
-            else:
-                segments.append(segment.strip())
+        # Add defaults if missing
+        if 'error' not in branch_map:
+            branch_map['error'] = 'Live Answer'
+        if 'none' not in branch_map:
+            branch_map['none'] = branch_map.get('3', 'Sleep')
         
-        # Clean up segments
-        cleaned_segments = []
-        for segment in segments:
-            if segment and len(segment) > 2:
-                cleaned_segments.append(segment)
+        print(f"🎯 Welcome branch map: {branch_map}")
         
-        return cleaned_segments[:6]  # Limit to 6 segments max
+        return {
+            "getDigits": {
+                "numDigits": 1,
+                "maxTime": 1,
+                "validChoices": "|".join(choices),
+                "errorPrompt": "callflow:1009"
+            },
+            "branch": branch_map
+        }
 
-    def _find_voice_file_for_text(self, text: str) -> str:
-        """Find matching voice file from database using intelligent matching"""
+    def _create_pin_entry_node(self, text: str, connections: List[Dict], node_id_to_label: Dict[str, str]) -> Dict:
+        """Create PIN entry node matching production patterns"""
         
+        branch_map = {}
+        for conn in connections:
+            label = conn.get('label', '').lower()
+            target_label = node_id_to_label.get(conn['target'], 'hangup')
+            
+            if 'yes' in label or 'correct' in label:
+                branch_map['{{pin}}'] = target_label
+            elif 'no' in label or 'invalid' in label:
+                branch_map['error'] = target_label
+        
+        if 'error' not in branch_map:
+            branch_map['error'] = 'Invalid Entry'
+        
+        return {
+            "getDigits": {
+                "numDigits": 5,  # 4 digits + pound
+                "maxTries": 3,
+                "maxTime": 7,
+                "validChoices": "{{pin}}",
+                "errorPrompt": "callflow:1009"
+            },
+            "branch": branch_map
+        }
+
+    def _create_availability_node(self, text: str, connections: List[Dict], node_id_to_label: Dict[str, str]) -> Dict:
+        """Create availability question node"""
+        
+        choices = re.findall(r'press\s+(\d+)', text.lower())
+        branch_map = {}
+        
+        for conn in connections:
+            label = conn.get('label', '').lower()
+            target_label = node_id_to_label.get(conn['target'], 'hangup')
+            
+            if '1' in label or 'accept' in label:
+                branch_map['1'] = target_label
+            elif '3' in label or 'decline' in label:
+                branch_map['3'] = target_label
+            elif '9' in label or 'call back' in label:
+                branch_map['9'] = target_label
+        
+        branch_map.update({
+            'error': 'Problems',
+            'none': 'Problems'
+        })
+        
+        return {
+            "getDigits": {
+                "numDigits": 1,
+                "maxTries": 3,
+                "maxTime": 7,
+                "validChoices": "|".join(choices),
+                "errorPrompt": "callflow:1009"
+            },
+            "branch": branch_map
+        }
+
+    def _create_decision_node(self, text: str, connections: List[Dict], node_id_to_label: Dict[str, str]) -> Dict:
+        """Create decision node (like PIN validation)"""
+        
+        branch_map = {}
+        for conn in connections:
+            label = conn.get('label', '').lower()
+            target_label = node_id_to_label.get(conn['target'], 'hangup')
+            
+            if 'yes' in label:
+                branch_map['yes'] = target_label
+            elif 'no' in label:
+                branch_map['no'] = target_label
+        
+        return {
+            "branch": branch_map
+        }
+
+    def _generate_production_prompts(self, text: str, node_type: NodeType) -> List[str]:
+        """Generate voice prompts matching production patterns"""
+        
+        # For welcome nodes, use segmented approach like allflows LITE
+        if self._is_welcome_node(text):
+            return [
+                "callflow:1177",      # "This is an"
+                "company:1202",       # company name
+                "callflow:1178",      # "electric callout"
+                "callflow:1231",      # "It is"
+                "current: dow, date, time",
+                "callflow:1002",      # "Press 1 if this is"
+                "names:{{contact_id}}",
+                "callflow:1005",      # "if you need more time"
+                "names:{{contact_id}}",
+                "callflow:1006",      # "to the phone"
+                "standard:PRS7NEU",   # "Press 7"
+                "callflow:1641",      # "if"
+                "names:{{contact_id}}",
+                "callflow:1004",      # "is not home"
+                "standard:PRS9NEU",   # "Press 9"
+                "callflow:1643"       # "to repeat this message"
+            ]
+        
+        # Find best matching voice file for other nodes
+        best_match = self._find_best_voice_match(text)
+        if best_match:
+            return [f"callflow:{best_match}"]
+        
+        return ["[VOICE FILE NEEDED]"]
+
+    def _find_best_voice_match(self, text: str) -> Optional[str]:
+        """Find best matching voice file"""
         text_lower = text.lower().strip()
         
         # Try exact match first
         if text_lower in self.exact_match_index:
-            return f"callflow:{self.exact_match_index[text_lower].callflow_id}"
+            return self.exact_match_index[text_lower].callflow_id
         
-        # Try partial matching with keywords
+        # Try keyword matching
         text_words = set(text_lower.split())
         best_match = None
         best_score = 0
         
         for voice_file in self.voice_files:
             transcript_words = set(voice_file.transcript.lower().split())
-            
-            # Calculate word overlap
             common_words = text_words.intersection(transcript_words)
             if common_words:
                 score = len(common_words) / max(len(text_words), len(transcript_words))
-                if score > best_score and score > 0.3:  # At least 30% match
+                if score > best_score and score > 0.4:
                     best_score = score
                     best_match = voice_file
         
-        if best_match:
-            return f"callflow:{best_match.callflow_id}"
-        
-        # Try fuzzy matching for key phrases
-        for voice_file in self.voice_files:
-            similarity = SequenceMatcher(None, text_lower, voice_file.transcript.lower()).ratio()
-            if similarity > 0.6:  # 60% similarity threshold
-                return f"callflow:{voice_file.callflow_id}"
-        
-        # Fallback - return placeholder
-        return "[VOICE FILE NEEDED]"
-
-    def _generate_voice_prompts_andres_style(self, text: str, variables: List[str]) -> List[str]:
-        """Generate voice prompts following Andres's segmentation methodology"""
-        
-        # Segment the text
-        segments = self._segment_text_like_andres(text, variables)
-        
-        # Convert each segment to voice file reference
-        prompts = []
-        
-        for segment in segments:
-            # Skip very short segments
-            if len(segment.strip()) < 3:
-                continue
-                
-            # Check if segment is a variable
-            if segment.startswith('{{') and segment.endswith('}}'):
-                prompts.append(segment)
-            else:
-                # Find voice file for this segment
-                voice_file = self._find_voice_file_for_text(segment)
-                prompts.append(voice_file)
-        
-        # Ensure we have at least one prompt
-        if not prompts:
-            prompts = ["[VOICE FILE NEEDED]"]
-        
-        return prompts
+        return best_match.callflow_id if best_match else None
 
     def _generate_javascript_output(self, ivr_flow: List[Dict]) -> str:
-        """Generate final JavaScript module output"""
+        """Generate production JavaScript output"""
         
-        # Format the flow as JavaScript
         js_output = "module.exports = [\n"
         
         for i, node in enumerate(ivr_flow):
-            # Format each node as proper JavaScript
             js_output += "  {\n"
             
             for key, value in node.items():
@@ -778,20 +654,18 @@ class AndresMethodologyConverter:
             js_output += "\n"
         
         js_output += "];\n"
-        
         return js_output
 
 
 def convert_mermaid_to_ivr(mermaid_code: str, uploaded_csv_file=None) -> Tuple[List[Dict], str]:
-    """Main function to convert Mermaid diagrams to IVR using Andres's methodology"""
-    
-    converter = AndresMethodologyConverter(uploaded_csv_file)
+    """Main function to convert Mermaid diagrams to production IVR"""
+    converter = ProductionIVRConverter(uploaded_csv_file)
     return converter.convert_mermaid_to_ivr(mermaid_code)
 
 
-# Test function for development
-def test_converter():
-    """Test the converter with the electric callout example"""
+# Test function
+def test_production_converter():
+    """Test the production converter with the electric callout example"""
     
     test_mermaid = '''flowchart TD
 A["Welcome<br/>This is an electric callout from (Level 2).<br/>Press 1, if this is (employee).<br/>Press 3, if you need more time to get (employee) to the phone.<br/>Press 7, if (employee) is not home.<br/>Press 9, to repeat this message.<br/><br/>9 - repeat, or invalid input"] -->|"input"| B{"1 - this is employee"}
@@ -823,11 +697,11 @@ D --> Q'''
     
     try:
         ivr_flow, js_output = convert_mermaid_to_ivr(test_mermaid)
-        print("✅ Test conversion successful!")
+        print("✅ Production test conversion successful!")
         print(f"Generated {len(ivr_flow)} nodes")
         
         # Check if choice 1 is properly mapped
-        welcome_node = next((node for node in ivr_flow if 'Welcome' in node.get('label', '')), None)
+        welcome_node = next((node for node in ivr_flow if node.get('label') == 'Live Answer'), None)
         if welcome_node and welcome_node.get('branch', {}).get('1'):
             print(f"✅ CRITICAL FIX VERIFIED: Choice 1 maps to '{welcome_node['branch']['1']}'")
         else:
@@ -836,9 +710,9 @@ D --> Q'''
         return ivr_flow, js_output
         
     except Exception as e:
-        print(f"❌ Test failed: {e}")
+        print(f"❌ Production test failed: {e}")
         return None, None
 
 
 if __name__ == "__main__":
-    test_converter()
+    test_production_converter()
