@@ -48,3 +48,12 @@ Thumbs.db
 # Logs
 *.log
 logs/
+devfeedback/DUKE - IB PROD for 71692.pdf
+devfeedback/EXPECTED - DUKENRG_1072_ib.js
+devfeedback/inbound.png
+devfeedback/mermaid.txt
+devfeedback/pdf error.png
+devfeedback/production_ivr_code.js
+devfeedback/RESULTS.txt
+.claude/settings.local.json
+CLAUDE.md

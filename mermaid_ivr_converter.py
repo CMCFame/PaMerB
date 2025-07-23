@@ -35,7 +35,7 @@ class FlexibleARCOSConverter:
 
     def _load_arcos_database(self, arcos_csv_file):
         """Load ARCOS recordings as foundation layer (Priority 100)"""
-        print("🏗️ Loading ARCOS foundation database...")
+        print("Loading ARCOS foundation database...")
         
         if arcos_csv_file:
             try:
@@ -63,20 +63,27 @@ class FlexibleARCOSConverter:
                     self.voice_files.append(voice_file)
                     arcos_count += 1
                 
-                print(f"✅ Loaded {arcos_count} ARCOS foundation recordings")
+                print(f"Loaded {arcos_count} ARCOS foundation recordings")
                 
             except Exception as e:
-                print(f"❌ Error loading ARCOS database: {e}")
+                print(f"Error loading ARCOS database: {e}")
                 self._load_arcos_fallbacks()
         else:
             self._load_arcos_fallbacks()
 
     def _load_arcos_fallbacks(self):
         """Load ARCOS fallback recordings based on allflows LITE patterns"""
-        print("📥 Loading ARCOS fallback recordings...")
+        print("Loading ARCOS fallback recordings...")
         
-        # Core ARCOS recordings from allflows LITE analysis
+        # Enhanced ARCOS recordings based on developer feedback
         arcos_core_files = [
+            # Notification/Message recordings (from developer feedback)
+            ("This is an important call notification message. Please listen carefully.", "1302"),
+            ("This is not a callout request", "1614"),
+            ("This is not a callout- do not report to work", "1615"),
+            ("you have accepted receipt of this message", "1297"),
+            ("to confirm receipt of the msg, press1. to replay the msg press 3", "1035"),
+            
             # Core callflow elements (from allflows LITE)
             ("This is an", "1191"),  # Primary greeting
             ("callout", "1274"),     # Callout noun
@@ -139,15 +146,15 @@ class FlexibleARCOSConverter:
             )
             self.voice_files.append(voice_file)
         
-        print(f"✅ Loaded {len(arcos_core_files)} ARCOS fallback recordings")
+        print(f"Loaded {len(arcos_core_files)} ARCOS fallback recordings")
 
     def _load_client_database(self, cf_general_csv):
         """Load client-specific recordings as overrides (Priority 200)"""
         if not cf_general_csv:
-            print("ℹ️ No client database provided - using ARCOS foundation only")
+            print("INFO: No client database provided - using ARCOS foundation only")
             return
             
-        print("🎯 Loading client-specific override database...")
+        print("LOADING: Client-specific override database...")
         
         try:
             import io
@@ -174,14 +181,14 @@ class FlexibleARCOSConverter:
                 self.voice_files.append(voice_file)
                 client_count += 1
             
-            print(f"✅ Loaded {client_count} client-specific override recordings")
+            print(f"SUCCESS: Loaded {client_count} client-specific override recordings")
             
         except Exception as e:
-            print(f"❌ Error loading client database: {e}")
+            print(f"ERROR: Loading client database: {e}")
 
     def _build_optimized_indexes(self):
         """Build optimized indexes with priority-based selection"""
-        print("🔨 Building optimized voice indexes with ARCOS foundation...")
+        print("BUILDING: Optimized voice indexes with ARCOS foundation...")
         
         # Build transcript index for searching
         for voice_file in self.voice_files:
@@ -207,12 +214,12 @@ class FlexibleARCOSConverter:
         arcos_count = sum(1 for vf in self.voice_files if vf.priority == 100)
         client_count = sum(1 for vf in self.voice_files if vf.priority == 200)
         
-        print(f"✅ Indexed {arcos_count} ARCOS + {client_count} client recordings")
-        print(f"✅ {len(self.callflow_index)} unique callflow IDs available")
+        print(f"SUCCESS: Indexed {arcos_count} ARCOS + {client_count} client recordings")
+        print(f"SUCCESS: {len(self.callflow_index)} unique callflow IDs available")
 
     def convert_mermaid_to_ivr(self, mermaid_code: str) -> Tuple[List[Dict], str]:
         """Convert Mermaid to IVR using FLEXIBLE approach"""
-        print(f"\n🚀 Starting flexible conversion...")
+        print(f"\nSTARTING: Flexible conversion...")
         
         # Parse the Mermaid diagram
         nodes, connections = self._parse_mermaid_enhanced(mermaid_code)
@@ -225,7 +232,7 @@ class FlexibleARCOSConverter:
             meaningful_label = self._generate_flexible_label(node_text, node_id)
             node_id_to_label[node_id] = meaningful_label
         
-        print(f"📋 Node mappings: {node_id_to_label}")
+        print(f"MAPPINGS: Node mappings: {node_id_to_label}")
         
         # Convert nodes to IVR format
         ivr_flow = []
@@ -241,10 +248,13 @@ class FlexibleARCOSConverter:
                 ivr_node = self._convert_node_to_ivr_flexible(node_id, nodes[node_id], connections, node_id_to_label)
                 ivr_flow.append(ivr_node)
         
+        # Remove unnecessary nodes for inbound flows (based on developer feedback)
+        ivr_flow = self._clean_inbound_flow_nodes(ivr_flow)
+        
         # Generate JavaScript output
         js_output = self._generate_javascript_output(ivr_flow)
         
-        print(f"✅ Flexible conversion completed! Generated {len(ivr_flow)} nodes")
+        print(f"SUCCESS: Flexible conversion completed! Generated {len(ivr_flow)} nodes")
         return ivr_flow, js_output
 
     def _parse_mermaid_enhanced(self, mermaid_code: str) -> Tuple[Dict[str, str], List[Dict]]:
@@ -272,25 +282,20 @@ class FlexibleARCOSConverter:
         
         # Extract connections
         connection_patterns = [
-            r'([A-Z]+)\s*-->\s*\|"([^"]+)"\|\s*([A-Z]+)',  # A -->|"label"| B
-            r'([A-Z]+)\s*-->\s*\|([^|]+)\|\s*([A-Z]+)',     # A -->|label| B  
-            r'([A-Z]+)\s*-->\s*([A-Z]+)',                   # A --> B
+            r'([A-Z]+)\s*-->\s*\|"([^"]+)"\|\s*([A-Z]+)',      # A -->|"label"| B (regular quotes)
+            r'([A-Z]+)\s*-->\s*\|([^|]+)\|\s*([A-Z]+)',        # A -->|label| B  
+            r'([A-Z]+)\s*-->\s*([A-Z]+)',                      # A --> B
         ]
         
         for pattern in connection_patterns:
             for match in re.finditer(pattern, mermaid_code):
                 source = match.group(1)
                 if len(match.groups()) == 3:
-                    if '|"' in pattern:
-                        label = match.group(2)
-                        target = match.group(3)
-                    elif '|' in pattern:
-                        label = match.group(2)
-                        target = match.group(3)
-                    else:
-                        label = ''
-                        target = match.group(2)
+                    # Has label and target
+                    label = match.group(2)
+                    target = match.group(3)
                 else:
+                    # Direct connection without label
                     label = ''
                     target = match.group(2)
                 
@@ -342,17 +347,17 @@ class FlexibleARCOSConverter:
         """FLEXIBLE label generation - works for ANY flow type"""
         text_lower = node_text.lower().strip()
         
-        # Handle questions/decisions dynamically
-        if '?' in node_text:
-            # Extract the question and make it a label
-            question = node_text.split('?')[0].strip()
-            # Take key words from the question
-            key_words = [word for word in question.split() if len(word) > 2 and word.lower() not in ['the', 'to', 'is', 'was', 'are', 'were']]
-            if key_words:
-                return ' '.join(key_words[:3]).title()
-        
-        # Dynamic pattern matching for actions
-        action_patterns = [
+        # Special IVR label patterns based on developer feedback
+        ivr_label_patterns = [
+            # Core IVR patterns
+            (r'notification.*callout', 'Callout'),
+            (r'custom\s+message', 'Custom Message'),
+            (r'confirm.*receipt', 'Offer'),  # "Confirm" becomes "Offer" per developer feedback
+            (r'accepted?\s+response', 'Accept'),
+            (r'invalid\s+entry', 'Invalid Entry'),
+            (r'disconnect', 'Hangup'),
+            (r'main\s+menu', 'Main Menu'),
+            
             # PIN related
             (r'enter\s+(?:your\s+)?(?:new\s+)?(?:four\s+digit\s+)?pin', 'Enter PIN'),
             (r'please\s+enter\s+(?:your\s+)?(?:new\s+)?(?:four\s+digit\s+)?pin', 'Enter PIN'),
@@ -383,7 +388,16 @@ class FlexibleARCOSConverter:
             (r'(\w+)\s+successfully', r'\1 Success'),
         ]
         
-        for pattern, replacement in action_patterns:
+        # Handle questions/decisions dynamically
+        if '?' in node_text:
+            # Extract the question and make it a label
+            question = node_text.split('?')[0].strip()
+            # Take key words from the question
+            key_words = [word for word in question.split() if len(word) > 2 and word.lower() not in ['the', 'to', 'is', 'was', 'are', 'were']]
+            if key_words:
+                return ' '.join(key_words[:3]).title()
+        
+        for pattern, replacement in ivr_label_patterns:
             match = re.search(pattern, text_lower)
             if match:
                 if r'\1' in replacement:
@@ -418,10 +432,12 @@ class FlexibleARCOSConverter:
             "log": f"{node_text.replace('\n', ' ')[:80]}..."
         }
         
-        # Generate voice prompts
-        play_prompts = self._generate_flexible_prompts(node_text, meaningful_label)
+        # Generate voice prompts and logs
+        play_prompts, play_logs = self._generate_flexible_prompts_and_logs(node_text, meaningful_label)
         if play_prompts:
             ivr_node["playPrompt"] = play_prompts
+        if play_logs:
+            ivr_node["playLog"] = play_logs
         
         # FLEXIBLE node type detection
         node_type = self._detect_node_type_flexible(node_text, node_connections)
@@ -447,18 +463,43 @@ class FlexibleARCOSConverter:
             # Terminal node
             ivr_node["goto"] = "hangup"
         
+        # Add special IVR attributes based on node content
+        self._add_special_ivr_attributes(ivr_node, node_text, meaningful_label, node_type)
+        
         # Add response handling for specific types
         if any(word in node_text.lower() for word in ['accept', 'decline', 'recorded', 'successfully']):
             if 'accept' in node_text.lower():
-                ivr_node["gosub"] = ["SaveCallResult", [1001, "Accept"]]
+                # Simplified gosub structure as per developer feedback
+                ivr_node["gosub"] = ["SaveCallResult", 1001, "Accept"]
             elif 'decline' in node_text.lower():
-                ivr_node["gosub"] = ["SaveCallResult", [1002, "Decline"]]
+                ivr_node["gosub"] = ["SaveCallResult", 1002, "Decline"]
         
         return ivr_node
+
+    def _add_special_ivr_attributes(self, ivr_node: Dict, node_text: str, label: str, node_type: str):
+        """Add special IVR attributes based on node content and type"""
+        text_lower = node_text.lower()
+        
+        # Add nobarge for message/notification nodes
+        if any(phrase in text_lower for phrase in ['notification', 'message', 'important', 'listen carefully']):
+            ivr_node["nobarge"] = 1
+        
+        # Add maxLoop for recursive/callout nodes
+        if any(phrase in text_lower for phrase in ['callout', 'notification']) and 'message' in text_lower:
+            # Based on developer feedback: on 4th try make them accept
+            ivr_node["maxLoop"] = ["PLAYMESSAGE", 3, "Accept-1025"]
+        
+        # Add returnsub for inbound flows (based on developer feedback)
+        if 'accept' in text_lower and any(phrase in text_lower for phrase in ['receipt', 'message']):
+            ivr_node["returnsub"] = 1
 
     def _detect_node_type_flexible(self, node_text: str, connections: List[Dict]) -> str:
         """FLEXIBLE node type detection"""
         text_lower = node_text.lower()
+        
+        # Decision indicators - check for press options with multiple choices
+        if ('press 1' in text_lower and 'press 3' in text_lower) or 'confirm' in text_lower:
+            return 'decision'
         
         # Decision indicators
         if '?' in node_text or any(word in text_lower for word in ['match', 'valid', 'correct', 'entered digits']):
@@ -468,8 +509,8 @@ class FlexibleARCOSConverter:
         if any(phrase in text_lower for phrase in ['enter your', 'please enter', 're-enter', 'followed by']):
             return 'input'
         
-        # Welcome indicators (flexible)
-        if any(phrase in text_lower for phrase in ['welcome', 'this is', 'hello', 'greeting', 'press 1']) and len(connections) > 2:
+        # Welcome indicators (flexible) - only if it has callout pattern and many connections
+        if any(phrase in text_lower for phrase in ['welcome', 'this is.*callout', 'hello', 'greeting']) and len(connections) > 3:
             return 'welcome'
         
         # Default
@@ -479,31 +520,50 @@ class FlexibleARCOSConverter:
         """Create decision node - FLEXIBLE approach"""
         branch_map = {}
         
+        print(f"PROCESSING: Decision node processing {len(connections)} connections...")
+        
         # Map connections based on labels
         for conn in connections:
             label = conn.get('label', '').lower()
             target_label = node_id_to_label.get(conn['target'], 'hangup')
             
-            # Flexible branch mapping
-            if 'yes' in label:
+            print(f"CONNECTING: Processing decision connection: '{label}' -> {target_label}")
+            
+            # Enhanced branch mapping based on developer feedback
+            # Check the target node to determine correct mapping
+            target_node_text = conn['target']
+            
+            if 'accept' in label and 'accept' in target_label.lower():
+                branch_map['1'] = target_label
+                print(f"MAPPED: Choice 1 (accept) -> {target_label}")
+            elif 'repeat' in label or ('3' in label and 'repeat' in label):
+                branch_map['3'] = target_label
+                print(f"MAPPED: Choice 3 (repeat) -> {target_label}")
+            elif '1' in label and ('accept' in target_label.lower() or 'response' in target_label.lower()):
+                branch_map['1'] = target_label
+                print(f"MAPPED: Choice 1 -> {target_label}")
+            elif '3' in label and ('custom' in target_label.lower() or 'message' in target_label.lower()):
+                branch_map['3'] = target_label
+                print(f"MAPPED: Choice 3 -> {target_label}")
+            elif 'invalid' in label or 'no input' in label:
+                branch_map['error'] = target_label
+                branch_map['none'] = target_label
+                print(f"MAPPED: Error/None -> {target_label}")
+            elif 'retry' in label:
+                branch_map['error'] = target_label
+                print(f"MAPPED: Error (retry) -> {target_label}")
+            elif 'yes' in label:
                 branch_map['yes'] = target_label
             elif 'no' in label:
                 branch_map['no'] = target_label
-            elif re.search(r'\b(one|1)\b', label):
-                branch_map['1'] = target_label
-            elif re.search(r'\b(three|3)\b', label):
-                branch_map['3'] = target_label
-            elif 'entered digits' in label:
-                branch_map['input'] = target_label
-            else:
-                # Use the connection label as the branch key
-                clean_label = re.sub(r'[^a-zA-Z0-9]', '_', label)[:10]
-                if clean_label:
-                    branch_map[clean_label] = target_label
         
-        # Add defaults
-        if not branch_map:
-            branch_map['default'] = 'hangup'
+        # Add required defaults
+        if 'error' not in branch_map:
+            branch_map['error'] = 'Problems'
+        if 'none' not in branch_map:
+            branch_map['none'] = 'Problems'
+        
+        print(f"RESULT: Decision branch map: {branch_map}")
         
         return {"branch": branch_map}
 
@@ -547,7 +607,8 @@ class FlexibleARCOSConverter:
                 "maxTries": 3,
                 "maxTime": 7,
                 "validChoices": valid_choices,
-                "errorPrompt": "callflow:1009"
+                "errorPrompt": "callflow:1009",
+                "nonePrompt": "callflow:1009"
             },
             "branch": branch_map
         }
@@ -562,31 +623,31 @@ class FlexibleARCOSConverter:
         
         branch_map = {}
         
-        print(f"🔍 Welcome node processing {len(connections)} connections...")
+        print(f"PROCESSING: Welcome node processing {len(connections)} connections...")
         
         # FLEXIBLE connection mapping
         for conn in connections:
             label = conn.get('label', '').lower()
             target_label = node_id_to_label.get(conn['target'], 'hangup')
             
-            print(f"🔗 Processing connection: '{label}' -> {target_label}")
+            print(f"CONNECTING: Processing connection: '{label}' -> {target_label}")
             
             # Map based on connection labels
             if 'input' in label:
                 branch_map['1'] = target_label
-                print(f"✅ Choice 1 (input) -> {target_label}")
+                print(f"MAPPED: Choice 1 (input) -> {target_label}")
             elif re.search(r'\b1\b', label):
                 branch_map['1'] = target_label
-                print(f"✅ Choice 1 -> {target_label}")
+                print(f"MAPPED: Choice 1 -> {target_label}")
             elif re.search(r'\b3\b', label):
                 branch_map['3'] = target_label
-                print(f"✅ Choice 3 -> {target_label}")
+                print(f"MAPPED: Choice 3 -> {target_label}")
             elif re.search(r'\b7\b', label):
                 branch_map['7'] = target_label
-                print(f"✅ Choice 7 -> {target_label}")
+                print(f"MAPPED: Choice 7 -> {target_label}")
             elif re.search(r'\b9\b', label):
                 branch_map['9'] = target_label
-                print(f"✅ Choice 9 -> {target_label}")
+                print(f"MAPPED: Choice 9 -> {target_label}")
             elif 'no input' in label or 'timeout' in label:
                 branch_map['none'] = target_label
             elif 'error' in label or 'retry' in label:
@@ -598,48 +659,81 @@ class FlexibleARCOSConverter:
         if 'none' not in branch_map:
             branch_map['none'] = 'Problems'
         
-        print(f"🎯 Welcome branch map: {branch_map}")
+        print(f"RESULT: Welcome branch map: {branch_map}")
         
         return {
             "getDigits": {
                 "numDigits": 1,
                 "maxTime": 7,
                 "validChoices": "|".join(choices),
-                "errorPrompt": "callflow:1009"
+                "errorPrompt": "callflow:1009",
+                "nonePrompt": "callflow:1009"
             },
             "branch": branch_map
         }
 
-    def _generate_flexible_prompts(self, text: str, label: str) -> List[str]:
-        """Generate voice prompts - FLEXIBLE approach"""
+    def _generate_flexible_prompts_and_logs(self, text: str, label: str) -> Tuple[List[str], List[str]]:
+        """Generate voice prompts and corresponding logs - FLEXIBLE approach"""
         
-        # For welcome nodes with specific patterns, use segmented approach
-        if any(phrase in text.lower() for phrase in ['this is an', 'electric callout', 'press 1']):
-            return [
-                "callflow:1177",           # "This is an"
-                "company:1202",            # company name
-                "callflow:1178",           # "electric callout"
-                "callflow:1231",           # "It is"
-                "current: dow, date, time", # current date/time
-                "callflow:1002",           # "Press 1 if this is"
-                "names:{{contact_id}}",    # employee name
-                "callflow:1005",           # "if you need more time"
-                "names:{{contact_id}}",    # employee name
-                "callflow:1006",           # "to the phone"
-                "standard:PRS7NEU",        # "Press 7"
-                "callflow:1641",           # "if"
-                "names:{{contact_id}}",    # employee name
-                "callflow:1004",           # "is not home"
-                "standard:PRS9NEU",        # "Press 9"
-                "callflow:1643"            # "to repeat this message"
-            ]
+        # Split text into logical segments for better matching
+        text_segments = self._split_text_into_segments(text)
         
-        # For other nodes, find best match
-        best_match = self._find_best_match_flexible(text)
-        if best_match:
-            return [f"callflow:{best_match}"]
+        prompts = []
+        logs = []
         
-        return ["[VOICE FILE NEEDED]"]
+        for segment in text_segments:
+            segment_clean = segment.strip()
+            if not segment_clean:
+                continue
+                
+            # Find best match for this segment
+            best_match = self._find_best_match_flexible(segment_clean)
+            if best_match:
+                prompts.append(f"callflow:{best_match}")
+                logs.append(segment_clean)
+            else:
+                # Check for custom message patterns
+                if 'custom message' in segment_clean.lower():
+                    prompts.append("custom:{{custom_message}}")
+                    logs.append("[Custom Message]")
+                elif segment_clean:
+                    prompts.append("[VOICE FILE NEEDED]")
+                    logs.append(segment_clean)
+        
+        # If no segments found or matched, fallback to original logic
+        if not prompts:
+            best_match = self._find_best_match_flexible(text)
+            if best_match:
+                prompts = [f"callflow:{best_match}"]
+                logs = [text.replace('\n', ' ').strip()]
+            else:
+                prompts = ["[VOICE FILE NEEDED]"]
+                logs = [text.replace('\n', ' ').strip()]
+        
+        return prompts, logs
+
+    def _split_text_into_segments(self, text: str) -> List[str]:
+        """Split text into logical segments for voice file matching"""
+        # Remove HTML breaks and normalize
+        text = text.replace('<br/>', '\n').replace('\\n', '\n')
+        
+        # Clean up quotes and formatting
+        text = text.replace('"', '').replace('\\', '')
+        
+        # Split by newlines first
+        segments = []
+        for line in text.split('\n'):
+            line = line.strip()
+            if line:
+                # Further split by sentence-ending punctuation
+                import re
+                sentence_parts = re.split(r'[.!?]+', line)
+                for part in sentence_parts:
+                    part = part.strip()
+                    if part and len(part) > 3:  # Skip very short segments
+                        segments.append(part)
+        
+        return segments if segments else [text.strip()]
 
     def _find_best_match_flexible(self, text: str) -> Optional[str]:
         """Find best matching voice file - FLEXIBLE approach"""
@@ -672,27 +766,76 @@ class FlexibleARCOSConverter:
         
         return best_match.callflow_id if best_match else None
 
+    def _clean_inbound_flow_nodes(self, ivr_flow: List[Dict]) -> List[Dict]:
+        """Remove unnecessary nodes for inbound flows based on developer feedback"""
+        cleaned_flow = []
+        
+        for node in ivr_flow:
+            label = node.get('label', '')
+            
+            # Skip unnecessary nodes for inbound flows
+            if label in ['Main Menu', 'Hangup'] and any('returnsub' in n.get('', {}) for n in ivr_flow):
+                print(f"REMOVING: Unnecessary inbound node: {label}")
+                continue
+            
+            # Update goto references to removed nodes
+            if 'goto' in node:
+                if node['goto'] in ['Main Menu', 'Hangup']:
+                    # For inbound flows, acceptance should use returnsub
+                    if 'accept' in label.lower():
+                        # Remove goto, the returnsub will handle flow
+                        del node['goto']
+                    else:
+                        node['goto'] = 'hangup'
+            
+            cleaned_flow.append(node)
+        
+        return cleaned_flow
+
     def _generate_javascript_output(self, ivr_flow: List[Dict]) -> str:
-        """Generate production JavaScript output"""
+        """Generate production JavaScript output with proper formatting"""
         
         js_output = "module.exports = [\n"
         
         for i, node in enumerate(ivr_flow):
-            js_output += "  {\n"
+            js_output += "    {\n"
             
             for key, value in node.items():
                 if isinstance(value, str):
-                    js_output += f'    {key}: "{value}",\n'
+                    # Properly escape quotes and handle multiline strings
+                    escaped_value = value.replace('"', '\\"').replace('\n', '\\n')
+                    js_output += f'        {key}: "{escaped_value}",\n'
                 elif isinstance(value, list):
-                    formatted_list = json.dumps(value, indent=4).replace('\n', '\n    ')
-                    js_output += f'    {key}: {formatted_list},\n'
+                    # Handle arrays without extra quotes around property names
+                    js_output += f'        {key}: [\n'
+                    for j, item in enumerate(value):
+                        if isinstance(item, str):
+                            escaped_item = item.replace('"', '\\"')
+                            js_output += f'            "{escaped_item}"'
+                        else:
+                            js_output += f'            {json.dumps(item)}'
+                        if j < len(value) - 1:
+                            js_output += ","
+                        js_output += "\n"
+                    js_output += "        ],\n"
                 elif isinstance(value, dict):
-                    formatted_dict = json.dumps(value, indent=4).replace('\n', '\n    ')
-                    js_output += f'    {key}: {formatted_dict},\n'
+                    # Handle objects without quotes around property names
+                    js_output += f'        {key}: {{\n'
+                    dict_items = list(value.items())
+                    for j, (dict_key, dict_value) in enumerate(dict_items):
+                        if isinstance(dict_value, str):
+                            escaped_dict_value = dict_value.replace('"', '\\"')
+                            js_output += f'            {dict_key}: "{escaped_dict_value}"'
+                        else:
+                            js_output += f'            {dict_key}: {json.dumps(dict_value)}'
+                        if j < len(dict_items) - 1:
+                            js_output += ","
+                        js_output += "\n"
+                    js_output += "        },\n"
                 else:
-                    js_output += f'    {key}: {json.dumps(value)},\n'
+                    js_output += f'        {key}: {json.dumps(value)},\n'
             
-            js_output += "  }"
+            js_output += "    }"
             if i < len(ivr_flow) - 1:
                 js_output += ","
             js_output += "\n"
