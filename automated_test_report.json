@@ -1,0 +1,1123 @@
+{
+  "total_tests": 5,
+  "tests_passed": 5,
+  "tests_failed": 0,
+  "total_critical_issues": 0,
+  "critical_issues": [],
+  "test_results": [
+    {
+      "test_name": "Electric Callout Flow",
+      "scenario": {
+        "name": "Electric Callout Flow",
+        "description": "Standard electric callout with employee verification",
+        "expected_features": [
+          "PIN verification",
+          "DTMF choices 1,3,7,9",
+          "Accept/Decline flow"
+        ],
+        "mermaid": "flowchart TD\nA[\"Welcome<br/>This is an electric callout from (Level 2).<br/>Press 1, if this is (employee).<br/>Press 3, if you need more time to get (employee) to the phone.<br/>Press 7, if (employee) is not home.<br/>Press 9, to repeat this message.<br/><br/>9 - repeat, or invalid input\"] -->|\"input\"| B{\"1 - this is employee\"}\nA -->|\"no input - go to pg 3\"| C[\"30-second message<br/>Press any key to<br/>continue...\"]\nA -->|\"7 - not home\"| D[\"Employee Not Home<br/>Please have<br/>(employee) call the<br/>(Level 2) Callout<br/>System at<br/>866-502-7267.\"]\nA -->|\"3 - need more time\"| C\nA -->|\"retry logic\"| A\nB -->|\"retry\"| E[\"Invalid Entry<br/>Invalid entry.<br/>Please try again.\"]\nE -->|\"retry\"| A\nB -->|\"yes\"| F[\"Enter Employee PIN<br/>Please enter your 4 digit PIN<br/>followed by the pound key.\"]\nF -->|\"no\"| E\nF -->|\"yes\"| G{\"Correct PIN?\"}\nG -->|\"no\"| E\nG -->|\"yes\"| H[\"Electric Callout<br/>This is an electric callout.\"]\nH --> I[\"Callout Reason<br/>The callout reason is (callout reason).\"]\nI --> J[\"Trouble Location<br/>The trouble location is (trouble location).\"]\nJ --> K[\"Custom Message<br/>(Play custom message, if selected.)\"]\nK --> L{\"Available For Callout<br/>Are you available to work this callout?<br/>If yes, press 1. If no, press 3.<br/>If no one else accepts, and you want to be called again, press 9.\"}\nL -->|\"1 - accept\"| M[\"Accepted Response<br/>An accepted response has<br/>been recorded.\"]\nL -->|\"3 - decline\"| N[\"Callout Decline<br/>Your response is being recorded as a decline.\"]\nL -->|\"9 - call back\"| O[\"Qualified No<br/>You may be called again on this<br/>callout if no one accepts.\"]\nM --> P[\"Goodbye<br/>Thank you.<br/>Goodbye.\"]\nN --> P\nO --> P\nP --> Q[\"Disconnect\"]\nD --> Q"
+      },
+      "result": [
+        [
+          {
+            "label": "Live Answer",
+            "maxLoop": [
+              "Main",
+              3,
+              "Problems"
+            ],
+            "playLog": [
+              "Welcome",
+              "This is an electric callout from",
+              "Level location spoken"
+            ],
+            "playPrompt": [
+              "callflow:ENV_VAR",
+              "callflow:1614",
+              "location:{{level1_location}}"
+            ]
+          },
+          {
+            "log": "environment",
+            "guard": "function (){ return this.data.env!='prod' && this.data.env!='PROD' }",
+            "playPrompt": "callflow:{{env}}",
+            "nobarge": 1
+          },
+          {
+            "playLog": [
+              "Press 1 if this is",
+              "Employee name spoken({{contact_id}})",
+              "Employee name spoken",
+              "to the phone",
+              "Employee name spoken",
+              "is not home",
+              "Press 9, to repeat this message",
+              "9 - repeat, or invalid input"
+            ],
+            "playPrompt": [
+              "callflow:1002",
+              "names:{{contact_id}}",
+              "names:{{contact_id}}",
+              "callflow:1006",
+              "names:{{contact_id}}",
+              "callflow:1004",
+              "callflow:1643",
+              "callflow:1009"
+            ],
+            "getDigits": {
+              "numDigits": 1,
+              "maxTime": 1,
+              "validChoices": "1|3|7|9",
+              "errorPrompt": "callflow:1009"
+            },
+            "branch": {
+              "1": "Employee",
+              "error": "Second Message",
+              "7": "Have",
+              "3": "Second Message",
+              "9": "Live Answer"
+            }
+          },
+          {
+            "label": "Employee",
+            "log": "Employee verification - Is this the employee?",
+            "playPrompt": [
+              "callflow:1002"
+            ],
+            "playLog": [
+              "Is this the employee?"
+            ],
+            "branch": {
+              "no": "Invalid Entry",
+              "yes": "Enter",
+              "error": "Problems",
+              "none": "Problems"
+            }
+          },
+          {
+            "label": "Invalid Entry",
+            "log": "\"Invalid Entry Invalid entry. Please try again.\"...",
+            "playPrompt": [
+              "callflow:1009",
+              "callflow:1009",
+              "callflow:1017"
+            ],
+            "playLog": [
+              "Invalid Entry",
+              "Invalid entry",
+              "Please try again"
+            ],
+            "branch": {
+              "error": "Live Answer",
+              "none": "Problems"
+            },
+            "maxLoop": [
+              "Loop-Invalid Entry",
+              5,
+              "Problems"
+            ],
+            "getDigits": {
+              "errorPrompt": "callflow:1009",
+              "nonePrompt": "callflow:1009"
+            },
+            "nobarge": 1
+          },
+          {
+            "label": "Enter",
+            "log": "\"Enter Employee PIN Please enter your 4 digit PIN followed by the pound key.\"...",
+            "playPrompt": [
+              "callflow:1097",
+              "callflow:1008",
+              "callflow:1008"
+            ],
+            "playLog": [
+              "Enter Employee PIN",
+              "Please enter your 4 digit PIN",
+              "followed by the pound key"
+            ],
+            "getDigits": {
+              "numDigits": 5,
+              "maxTries": 3,
+              "maxTime": 7,
+              "validChoices": "{{pin}}",
+              "errorPrompt": "callflow:1009",
+              "nonePrompt": "callflow:1009"
+            },
+            "branch": {
+              "1": "Enter PIN",
+              "next": "After PIN"
+            },
+            "branchOn": "{{pin_req}}"
+          },
+          {
+            "label": "\"Correct Pin",
+            "log": "\"Correct PIN?\"...",
+            "playPrompt": [
+              "callflow:1139"
+            ],
+            "playLog": [
+              "Correct PIN"
+            ],
+            "branch": {
+              "no": "Invalid Entry",
+              "yes": "Electric Callout",
+              "error": "Problems",
+              "none": "Problems"
+            }
+          },
+          {
+            "label": "Electric Callout",
+            "log": "\"Electric Callout This is an electric callout.\"...",
+            "playPrompt": [
+              "callflow:1274",
+              "callflow:1614"
+            ],
+            "playLog": [
+              "Electric Callout",
+              "This is an electric callout"
+            ],
+            "goto": "Callout Reason",
+            "maxLoop": [
+              "Main",
+              3,
+              "Problems"
+            ]
+          },
+          {
+            "label": "Callout Reason",
+            "log": "\"Callout Reason The callout reason is (callout reason).\"...",
+            "playPrompt": [
+              "callflow:1019",
+              "callflow:1019",
+              "reason:{{callout_reason}}"
+            ],
+            "playLog": [
+              "Callout Reason",
+              "The callout reason is",
+              "Callout reason spoken"
+            ],
+            "goto": "Trouble Location",
+            "guardPrompt": "reason:{{callout_reason}}"
+          },
+          {
+            "label": "Trouble Location",
+            "log": "\"Trouble Location The trouble location is (trouble location).\"...",
+            "playPrompt": [
+              "callflow:1232",
+              "callflow:1232",
+              "location:{{callout_location}}"
+            ],
+            "playLog": [
+              "Trouble Location",
+              "The trouble location is",
+              "Trouble location spoken"
+            ],
+            "goto": "Custom Message",
+            "guardPrompt": "location:{{callout_location}}"
+          },
+          {
+            "label": "Custom Message",
+            "log": "\"Custom Message (Play custom message, if selected.)\"...",
+            "playPrompt": [
+              "callflow:1643",
+              "callflow:1002"
+            ],
+            "playLog": [
+              "Custom Message",
+              "(Play custom message, if selected"
+            ],
+            "goto": "\"Available For Callout",
+            "nobarge": 1,
+            "guardPrompt": "custom:{{custom_message}}"
+          },
+          {
+            "label": "\"Available For Callout",
+            "log": "\"Available For Callout Are you available to work this callout? If yes, press 1. ...",
+            "playPrompt": [
+              "callflow:1274",
+              "callflow:1297",
+              "callflow:PRS1NEU",
+              "callflow:PRS3NEU",
+              "[VOICE FILE NEEDED]"
+            ],
+            "playLog": [
+              "Available For Callout",
+              "Are you available to work this callout",
+              "If yes, press 1",
+              "If no, press 3",
+              "If no one else accepts, and you want to be called again, press 9"
+            ],
+            "branch": {
+              "1": "Confirm Accept",
+              "error": "Problems",
+              "none": "Problems"
+            },
+            "maxLoop": [
+              "Main",
+              3,
+              "Problems"
+            ]
+          },
+          {
+            "label": "Confirm Accept",
+            "log": "You pressed 1 to accept. Please press 1 again to confirm",
+            "playPrompt": [
+              "callflow:1366"
+            ],
+            "playLog": [
+              "You pressed 1 to accept. Please press 1 again to confirm"
+            ],
+            "getDigits": {
+              "numDigits": 1,
+              "maxTries": 1,
+              "maxTime": 7,
+              "validChoices": "1"
+            },
+            "branch": {
+              "1": "Accept",
+              "error": "Invalid_Response",
+              "none": "Invalid_Response"
+            }
+          },
+          {
+            "label": "Invalid_Response",
+            "log": "Invalid entry. Please try again",
+            "playPrompt": [
+              "callflow:1009"
+            ],
+            "playLog": [
+              "Invalid entry. Please try again"
+            ],
+            "maxLoop": [
+              "Loop-D",
+              3,
+              "Problems"
+            ],
+            "goto": "Offer",
+            "nobarge": 1
+          },
+          {
+            "label": "Accept",
+            "log": "\"Accepted Response An accepted response has been recorded.\"...",
+            "playPrompt": [
+              "callflow:1297",
+              "callflow:1297",
+              "callflow:1104"
+            ],
+            "playLog": [
+              "Accepted Response",
+              "An accepted response has",
+              "been recorded"
+            ],
+            "goto": "Goodbye Thank",
+            "gosub": [
+              "SaveCallResult",
+              1001,
+              "Accept"
+            ]
+          },
+          {
+            "label": "Goodbye Thank",
+            "log": "\"Goodbye Thank you. Goodbye.\"...",
+            "playPrompt": [
+              "[VOICE FILE NEEDED]",
+              "callflow:1297",
+              "[VOICE FILE NEEDED]"
+            ],
+            "playLog": [
+              "Goodbye",
+              "Thank you",
+              "Goodbye"
+            ],
+            "goto": "hangup"
+          },
+          {
+            "label": "Hangup",
+            "log": "\"Disconnect\"...",
+            "playPrompt": [
+              "callflow:ENV_VAR"
+            ],
+            "playLog": [
+              "Disconnect"
+            ],
+            "goto": "hangup"
+          },
+          {
+            "label": "Callout Decline",
+            "log": "\"Callout Decline Your response is being recorded as a decline.\"...",
+            "playPrompt": [
+              "callflow:1274",
+              "callflow:1100"
+            ],
+            "playLog": [
+              "Callout Decline",
+              "Your response is being recorded as a decline"
+            ],
+            "goto": "Goodbye Thank",
+            "gosub": [
+              "SaveCallResult",
+              1002,
+              "Decline"
+            ]
+          },
+          {
+            "label": "Qualified You",
+            "log": "\"Qualified No You may be called again on this callout if no one accepts.\"...",
+            "playPrompt": [
+              "callflow:1145",
+              "callflow:1297",
+              "callflow:1019"
+            ],
+            "playLog": [
+              "Qualified No",
+              "You may be called again on this",
+              "callout if no one accepts"
+            ],
+            "goto": "Goodbye Thank"
+          },
+          {
+            "label": "Confirm QualNo",
+            "log": "You pressed 7 to be called again. Please press 7 again to confirm",
+            "playPrompt": [
+              "callflow:2136"
+            ],
+            "playLog": [
+              "You pressed 7 to be called again. Please press 7 again to confirm"
+            ],
+            "getDigits": {
+              "numDigits": 1,
+              "maxTries": 1,
+              "maxTime": 7,
+              "validChoices": "7"
+            },
+            "branch": {
+              "7": "QualNo",
+              "error": "Invalid_Response",
+              "none": "Invalid_Response"
+            }
+          },
+          {
+            "label": "Invalid_Response",
+            "log": "Invalid entry. Please try again",
+            "playPrompt": [
+              "callflow:1009"
+            ],
+            "playLog": [
+              "Invalid entry. Please try again"
+            ],
+            "maxLoop": [
+              "Loop-D",
+              3,
+              "Problems"
+            ],
+            "goto": "Offer",
+            "nobarge": 1
+          },
+          {
+            "label": "Second Message",
+            "log": "\"30-second message Press any key to continue...\"...",
+            "playPrompt": [
+              "callflow:1643",
+              "callflow:1002",
+              "callflow:1002"
+            ],
+            "playLog": [
+              "30-second message",
+              "Press any key to",
+              "continue"
+            ],
+            "goto": "hangup",
+            "nobarge": 1
+          },
+          {
+            "label": "Have",
+            "log": "\"Employee Not Home Please have (employee) call the (Level 2) Callout System at 8...",
+            "playPrompt": [
+              "callflow:1004",
+              "callflow:1017",
+              "callflow:1174",
+              "callflow:1274",
+              "callflow:1290",
+              "[VOICE FILE NEEDED]"
+            ],
+            "playLog": [
+              "Employee Not Home",
+              "Please have",
+              "(employee) call the",
+              "(Level 2) Callout",
+              "System at",
+              "866-502-7267"
+            ],
+            "goto": "hangup"
+          }
+        ],
+        "module.exports = [\n    {\n        label: \"Live Answer\",\n        maxLoop: [\n            \"Main\",\n            3,\n            \"Problems\"\n        ],\n        playLog: [\n            \"Welcome\",\n            \"This is an electric callout from\",\n            \"Level location spoken\"\n        ],\n        playPrompt: [\n            \"callflow:ENV_VAR\",\n            \"callflow:1614\",\n            \"location:{{level1_location}}\"\n        ],\n    },\n    {\n        log: \"environment\",\n        guard: \"function (){ return this.data.env!='prod' && this.data.env!='PROD' }\",\n        playPrompt: \"callflow:{{env}}\",\n        nobarge: 1,\n    },\n    {\n        playLog: [\n            \"Press 1 if this is\",\n            \"Employee name spoken({{contact_id}})\",\n            \"Employee name spoken\",\n            \"to the phone\",\n            \"Employee name spoken\",\n            \"is not home\",\n            \"Press 9, to repeat this message\",\n            \"9 - repeat, or invalid input\"\n        ],\n        playPrompt: [\n            \"callflow:1002\",\n            \"names:{{contact_id}}\",\n            \"names:{{contact_id}}\",\n            \"callflow:1006\",\n            \"names:{{contact_id}}\",\n            \"callflow:1004\",\n            \"callflow:1643\",\n            \"callflow:1009\"\n        ],\n        getDigits: {\n            numDigits: 1,\n            maxTime: 1,\n            validChoices: \"1|3|7|9\",\n            errorPrompt: \"callflow:1009\"\n        },\n        branch: {\n            1: \"Employee\",\n            error: \"Second Message\",\n            7: \"Have\",\n            3: \"Second Message\",\n            9: \"Live Answer\"\n        },\n    },\n    {\n        label: \"Employee\",\n        log: \"Employee verification - Is this the employee?\",\n        playPrompt: [\n            \"callflow:1002\"\n        ],\n        playLog: [\n            \"Is this the employee?\"\n        ],\n        branch: {\n            no: \"Invalid Entry\",\n            yes: \"Enter\",\n            error: \"Problems\",\n            none: \"Problems\"\n        },\n    },\n    {\n        label: \"Invalid Entry\",\n        log: \"Invalid Entry Invalid entry. Please try again.\",\n        playPrompt: [\n            \"callflow:1009\",\n            \"callflow:1009\",\n            \"callflow:1017\"\n        ],\n        playLog: [\n            \"Invalid Entry\",\n            \"Invalid entry\",\n            \"Please try again\"\n        ],\n        branch: {\n            error: \"Live Answer\",\n            none: \"Problems\"\n        },\n        maxLoop: [\n            \"Loop-Invalid Entry\",\n            5,\n            \"Problems\"\n        ],\n        getDigits: {\n            errorPrompt: \"callflow:1009\",\n            nonePrompt: \"callflow:1009\"\n        },\n        nobarge: 1,\n    },\n    {\n        label: \"Enter\",\n        log: \"Enter Employee PIN Please enter your 4 digit PIN followed by the pound key.\",\n        playPrompt: [\n            \"callflow:1097\",\n            \"callflow:1008\",\n            \"callflow:1008\"\n        ],\n        playLog: [\n            \"Enter Employee PIN\",\n            \"Please enter your 4 digit PIN\",\n            \"followed by the pound key\"\n        ],\n        getDigits: {\n            numDigits: 5,\n            maxTries: 3,\n            maxTime: 7,\n            validChoices: \"{{pin}}\",\n            errorPrompt: \"callflow:1009\",\n            nonePrompt: \"callflow:1009\"\n        },\n        branch: {\n            1: \"Enter PIN\",\n            next: \"After PIN\"\n        },\n        branchOn: \"{{pin_req}}\",\n    },\n    {\n        label: \"\\\"Correct Pin\",\n        log: \"Correct PIN?\",\n        playPrompt: [\n            \"callflow:1139\"\n        ],\n        playLog: [\n            \"Correct PIN\"\n        ],\n        branch: {\n            no: \"Invalid Entry\",\n            yes: \"Electric Callout\",\n            error: \"Problems\",\n            none: \"Problems\"\n        },\n    },\n    {\n        label: \"Electric Callout\",\n        log: \"Electric Callout This is an electric callout.\",\n        playPrompt: [\n            \"callflow:1274\",\n            \"callflow:1614\"\n        ],\n        playLog: [\n            \"Electric Callout\",\n            \"This is an electric callout\"\n        ],\n        goto: \"Callout Reason\",\n        maxLoop: [\n            \"Main\",\n            3,\n            \"Problems\"\n        ],\n    },\n    {\n        label: \"Callout Reason\",\n        log: \"Callout Reason The callout reason is (callout reason).\",\n        playPrompt: [\n            \"callflow:1019\",\n            \"callflow:1019\",\n            \"reason:{{callout_reason}}\"\n        ],\n        playLog: [\n            \"Callout Reason\",\n            \"The callout reason is\",\n            \"Callout reason spoken\"\n        ],\n        goto: \"Trouble Location\",\n        guardPrompt: \"reason:{{callout_reason}}\",\n    },\n    {\n        label: \"Trouble Location\",\n        log: \"Trouble Location The trouble location is (trouble location).\",\n        playPrompt: [\n            \"callflow:1232\",\n            \"callflow:1232\",\n            \"location:{{callout_location}}\"\n        ],\n        playLog: [\n            \"Trouble Location\",\n            \"The trouble location is\",\n            \"Trouble location spoken\"\n        ],\n        goto: \"Custom Message\",\n        guardPrompt: \"location:{{callout_location}}\",\n    },\n    {\n        label: \"Custom Message\",\n        log: \"Custom Message (Play custom message, if selected.)\",\n        playPrompt: [\n            \"callflow:1643\",\n            \"callflow:1002\"\n        ],\n        playLog: [\n            \"Custom Message\",\n            \"(Play custom message, if selected\"\n        ],\n        goto: \"\\\"Available For Callout\",\n        nobarge: 1,\n        guardPrompt: \"custom:{{custom_message}}\",\n    },\n    {\n        label: \"\\\"Available For Callout\",\n        log: \"Available For Callout Are you available to work this callout? If yes, press 1.\",\n        playPrompt: [\n            \"callflow:1274\",\n            \"callflow:1297\",\n            \"callflow:PRS1NEU\",\n            \"callflow:PRS3NEU\",\n            \"[VOICE FILE NEEDED]\"\n        ],\n        playLog: [\n            \"Available For Callout\",\n            \"Are you available to work this callout\",\n            \"If yes, press 1\",\n            \"If no, press 3\",\n            \"If no one else accepts, and you want to be called again, press 9\"\n        ],\n        branch: {\n            1: \"Confirm Accept\",\n            error: \"Problems\",\n            none: \"Problems\"\n        },\n        maxLoop: [\n            \"Main\",\n            3,\n            \"Problems\"\n        ],\n    },\n    {\n        label: \"Confirm Accept\",\n        log: \"You pressed 1 to accept. Please press 1 again to confirm\",\n        playPrompt: [\n            \"callflow:1366\"\n        ],\n        playLog: [\n            \"You pressed 1 to accept. Please press 1 again to confirm\"\n        ],\n        getDigits: {\n            numDigits: 1,\n            maxTries: 1,\n            maxTime: 7,\n            validChoices: \"1\"\n        },\n        branch: {\n            1: \"Accept\",\n            error: \"Invalid_Response\",\n            none: \"Invalid_Response\"\n        },\n    },\n    {\n        label: \"Invalid_Response\",\n        log: \"Invalid entry. Please try again\",\n        playPrompt: [\n            \"callflow:1009\"\n        ],\n        playLog: [\n            \"Invalid entry. Please try again\"\n        ],\n        maxLoop: [\n            \"Loop-D\",\n            3,\n            \"Problems\"\n        ],\n        goto: \"Offer\",\n        nobarge: 1,\n    },\n    {\n        label: \"Accept\",\n        log: \"Accepted Response An accepted response has been recorded.\",\n        playPrompt: [\n            \"callflow:1297\",\n            \"callflow:1297\",\n            \"callflow:1104\"\n        ],\n        playLog: [\n            \"Accepted Response\",\n            \"An accepted response has\",\n            \"been recorded\"\n        ],\n        goto: \"Goodbye Thank\",\n        gosub: [\"SaveCallResult\", 1001, \"Accept\"],\n    },\n    {\n        label: \"Goodbye Thank\",\n        log: \"Goodbye Thank you. Goodbye.\",\n        playPrompt: [\n            \"[VOICE FILE NEEDED]\",\n            \"callflow:1297\",\n            \"[VOICE FILE NEEDED]\"\n        ],\n        playLog: [\n            \"Goodbye\",\n            \"Thank you\",\n            \"Goodbye\"\n        ],\n        goto: \"hangup\",\n    },\n    {\n        label: \"Hangup\",\n        log: \"Disconnect\",\n        playPrompt: [\n            \"callflow:ENV_VAR\"\n        ],\n        playLog: [\n            \"Disconnect\"\n        ],\n        goto: \"hangup\",\n    },\n    {\n        label: \"Callout Decline\",\n        log: \"Callout Decline Your response is being recorded as a decline.\",\n        playPrompt: [\n            \"callflow:1274\",\n            \"callflow:1100\"\n        ],\n        playLog: [\n            \"Callout Decline\",\n            \"Your response is being recorded as a decline\"\n        ],\n        goto: \"Goodbye Thank\",\n        gosub: [\"SaveCallResult\", 1002, \"Decline\"],\n    },\n    {\n        label: \"Qualified You\",\n        log: \"Qualified No You may be called again on this callout if no one accepts.\",\n        playPrompt: [\n            \"callflow:1145\",\n            \"callflow:1297\",\n            \"callflow:1019\"\n        ],\n        playLog: [\n            \"Qualified No\",\n            \"You may be called again on this\",\n            \"callout if no one accepts\"\n        ],\n        goto: \"Goodbye Thank\",\n    },\n    {\n        label: \"Confirm QualNo\",\n        log: \"You pressed 7 to be called again. Please press 7 again to confirm\",\n        playPrompt: [\n            \"callflow:2136\"\n        ],\n        playLog: [\n            \"You pressed 7 to be called again. Please press 7 again to confirm\"\n        ],\n        getDigits: {\n            numDigits: 1,\n            maxTries: 1,\n            maxTime: 7,\n            validChoices: \"7\"\n        },\n        branch: {\n            7: \"QualNo\",\n            error: \"Invalid_Response\",\n            none: \"Invalid_Response\"\n        },\n    },\n    {\n        label: \"Invalid_Response\",\n        log: \"Invalid entry. Please try again\",\n        playPrompt: [\n            \"callflow:1009\"\n        ],\n        playLog: [\n            \"Invalid entry. Please try again\"\n        ],\n        maxLoop: [\n            \"Loop-D\",\n            3,\n            \"Problems\"\n        ],\n        goto: \"Offer\",\n        nobarge: 1,\n    },\n    {\n        label: \"Second Message\",\n        log: \"30-second message Press any key to continue\",\n        playPrompt: [\n            \"callflow:1643\",\n            \"callflow:1002\",\n            \"callflow:1002\"\n        ],\n        playLog: [\n            \"30-second message\",\n            \"Press any key to\",\n            \"continue\"\n        ],\n        goto: \"hangup\",\n        nobarge: 1,\n    },\n    {\n        label: \"Have\",\n        log: \"Employee Not Home Please have (employee) call the (Level 2) Callout System at 8\",\n        playPrompt: [\n            \"callflow:1004\",\n            \"callflow:1017\",\n            \"callflow:1174\",\n            \"callflow:1274\",\n            \"callflow:1290\",\n            \"[VOICE FILE NEEDED]\"\n        ],\n        playLog: [\n            \"Employee Not Home\",\n            \"Please have\",\n            \"(employee) call the\",\n            \"(Level 2) Callout\",\n            \"System at\",\n            \"866-502-7267\"\n        ],\n        goto: \"hangup\",\n    }\n];\n"
+      ],
+      "analysis": {
+        "node_count": 23,
+        "critical_issues": [],
+        "dtmf_mappings": {
+          "1": "Accept",
+          "7": "QualNo",
+          "3": "Second Message",
+          "9": "Live Answer"
+        },
+        "gosub_count": 2,
+        "node_labels": [
+          "Live Answer",
+          "",
+          "",
+          "Employee",
+          "Invalid Entry",
+          "Enter",
+          "\"Correct Pin",
+          "Electric Callout",
+          "Callout Reason",
+          "Trouble Location",
+          "Custom Message",
+          "\"Available For Callout",
+          "Confirm Accept",
+          "Invalid_Response",
+          "Accept",
+          "Goodbye Thank",
+          "Hangup",
+          "Callout Decline",
+          "Qualified You",
+          "Confirm QualNo",
+          "Invalid_Response",
+          "Second Message",
+          "Have"
+        ]
+      },
+      "timestamp": 1753325953.911226
+    },
+    {
+      "test_name": "Emergency Callout Flow",
+      "scenario": {
+        "name": "Emergency Callout Flow",
+        "description": "High-priority emergency callout with immediate response",
+        "expected_features": [
+          "Immediate response",
+          "No PIN required",
+          "Accept only"
+        ],
+        "mermaid": "flowchart TD\nA[\"EMERGENCY CALLOUT<br/>This is an EMERGENCY callout.<br/>Press 1 to accept immediately.<br/>Press 9 to repeat this message.\"] -->|\"1 - immediate accept\"| B[\"Emergency Accept<br/>You have accepted this emergency callout.<br/>Report immediately.\"]\nA -->|\"9 - repeat\"| A\nA -->|\"no response\"| C[\"No Response<br/>No response recorded for emergency callout.\"]\nB --> D[\"Goodbye<br/>Thank you.<br/>Goodbye.\"]\nC --> D\nD --> E[\"Disconnect\"]"
+      },
+      "result": [
+        [
+          {
+            "label": "Emergency Callout",
+            "log": "\"EMERGENCY CALLOUT This is an EMERGENCY callout. Press 1 to accept immediately. ...",
+            "playPrompt": [
+              "callflow:1274",
+              "callflow:1614",
+              "callflow:1002",
+              "callflow:1643"
+            ],
+            "playLog": [
+              "EMERGENCY CALLOUT",
+              "This is an EMERGENCY callout",
+              "Press 1 to accept immediately",
+              "Press 9 to repeat this message"
+            ],
+            "nobarge": 1,
+            "maxLoop": [
+              "Main",
+              3,
+              "Problems"
+            ],
+            "returnsub": 1,
+            "gosub": [
+              "SaveCallResult",
+              1001,
+              "Accept"
+            ]
+          },
+          {
+            "label": "Emergency Accept",
+            "log": "\"Emergency Accept You have accepted this emergency callout. Report immediately.\"...",
+            "playPrompt": [
+              "callflow:1001",
+              "callflow:1297",
+              "callflow:1643"
+            ],
+            "playLog": [
+              "Emergency Accept",
+              "You have accepted this emergency callout",
+              "Report immediately"
+            ],
+            "goto": "Goodbye Thank"
+          },
+          {
+            "label": "Confirm Accept",
+            "log": "You pressed 1 to accept. Please press 1 again to confirm",
+            "playPrompt": [
+              "callflow:1366"
+            ],
+            "playLog": [
+              "You pressed 1 to accept. Please press 1 again to confirm"
+            ],
+            "getDigits": {
+              "numDigits": 1,
+              "maxTries": 1,
+              "maxTime": 7,
+              "validChoices": "1"
+            },
+            "branch": {
+              "1": "Accept",
+              "error": "Invalid_Response",
+              "none": "Invalid_Response"
+            }
+          },
+          {
+            "label": "Invalid_Response",
+            "log": "Invalid entry. Please try again",
+            "playPrompt": [
+              "callflow:1009"
+            ],
+            "playLog": [
+              "Invalid entry. Please try again"
+            ],
+            "maxLoop": [
+              "Loop-D",
+              3,
+              "Problems"
+            ],
+            "goto": "Offer",
+            "nobarge": 1
+          },
+          {
+            "label": "Goodbye Thank",
+            "log": "\"Goodbye Thank you. Goodbye.\"...",
+            "playPrompt": [
+              "[VOICE FILE NEEDED]",
+              "callflow:1297",
+              "[VOICE FILE NEEDED]"
+            ],
+            "playLog": [
+              "Goodbye",
+              "Thank you",
+              "Goodbye"
+            ],
+            "goto": "hangup"
+          },
+          {
+            "label": "Hangup",
+            "log": "\"Disconnect\"...",
+            "playPrompt": [
+              "callflow:ENV_VAR"
+            ],
+            "playLog": [
+              "Disconnect"
+            ],
+            "goto": "hangup"
+          },
+          {
+            "label": "Response Response",
+            "log": "\"No Response No response recorded for emergency callout.\"...",
+            "playPrompt": [
+              "callflow:1006",
+              "[VOICE FILE NEEDED]"
+            ],
+            "playLog": [
+              "No Response",
+              "No response recorded for emergency callout"
+            ],
+            "goto": "Goodbye Thank"
+          }
+        ],
+        "module.exports = [\n    {\n        label: \"Emergency Callout\",\n        log: \"EMERGENCY CALLOUT This is an EMERGENCY callout. Press 1 to accept immediately.\",\n        playPrompt: [\n            \"callflow:1274\",\n            \"callflow:1614\",\n            \"callflow:1002\",\n            \"callflow:1643\"\n        ],\n        playLog: [\n            \"EMERGENCY CALLOUT\",\n            \"This is an EMERGENCY callout\",\n            \"Press 1 to accept immediately\",\n            \"Press 9 to repeat this message\"\n        ],\n        nobarge: 1,\n        maxLoop: [\n            \"Main\",\n            3,\n            \"Problems\"\n        ],\n        returnsub: 1,\n        gosub: [\"SaveCallResult\", 1001, \"Accept\"],\n    },\n    {\n        label: \"Emergency Accept\",\n        log: \"Emergency Accept You have accepted this emergency callout. Report immediately.\",\n        playPrompt: [\n            \"callflow:1001\",\n            \"callflow:1297\",\n            \"callflow:1643\"\n        ],\n        playLog: [\n            \"Emergency Accept\",\n            \"You have accepted this emergency callout\",\n            \"Report immediately\"\n        ],\n        goto: \"Goodbye Thank\",\n    },\n    {\n        label: \"Confirm Accept\",\n        log: \"You pressed 1 to accept. Please press 1 again to confirm\",\n        playPrompt: [\n            \"callflow:1366\"\n        ],\n        playLog: [\n            \"You pressed 1 to accept. Please press 1 again to confirm\"\n        ],\n        getDigits: {\n            numDigits: 1,\n            maxTries: 1,\n            maxTime: 7,\n            validChoices: \"1\"\n        },\n        branch: {\n            1: \"Accept\",\n            error: \"Invalid_Response\",\n            none: \"Invalid_Response\"\n        },\n    },\n    {\n        label: \"Invalid_Response\",\n        log: \"Invalid entry. Please try again\",\n        playPrompt: [\n            \"callflow:1009\"\n        ],\n        playLog: [\n            \"Invalid entry. Please try again\"\n        ],\n        maxLoop: [\n            \"Loop-D\",\n            3,\n            \"Problems\"\n        ],\n        goto: \"Offer\",\n        nobarge: 1,\n    },\n    {\n        label: \"Goodbye Thank\",\n        log: \"Goodbye Thank you. Goodbye.\",\n        playPrompt: [\n            \"[VOICE FILE NEEDED]\",\n            \"callflow:1297\",\n            \"[VOICE FILE NEEDED]\"\n        ],\n        playLog: [\n            \"Goodbye\",\n            \"Thank you\",\n            \"Goodbye\"\n        ],\n        goto: \"hangup\",\n    },\n    {\n        label: \"Hangup\",\n        log: \"Disconnect\",\n        playPrompt: [\n            \"callflow:ENV_VAR\"\n        ],\n        playLog: [\n            \"Disconnect\"\n        ],\n        goto: \"hangup\",\n    },\n    {\n        label: \"Response Response\",\n        log: \"No Response No response recorded for emergency callout.\",\n        playPrompt: [\n            \"callflow:1006\",\n            \"[VOICE FILE NEEDED]\"\n        ],\n        playLog: [\n            \"No Response\",\n            \"No response recorded for emergency callout\"\n        ],\n        goto: \"Goodbye Thank\",\n    }\n];\n"
+      ],
+      "analysis": {
+        "node_count": 7,
+        "critical_issues": [],
+        "dtmf_mappings": {
+          "1": "Accept"
+        },
+        "gosub_count": 1,
+        "node_labels": [
+          "Emergency Callout",
+          "Emergency Accept",
+          "Confirm Accept",
+          "Invalid_Response",
+          "Goodbye Thank",
+          "Hangup",
+          "Response Response"
+        ]
+      },
+      "timestamp": 1753325953.928688
+    },
+    {
+      "test_name": "Maintenance Callout Flow",
+      "scenario": {
+        "name": "Maintenance Callout Flow",
+        "description": "Scheduled maintenance callout with time options",
+        "expected_features": [
+          "Time selection",
+          "Maintenance specific prompts",
+          "Scheduling"
+        ],
+        "mermaid": "flowchart TD\nA[\"Maintenance Callout<br/>Scheduled maintenance required.<br/>Press 1 if available now.<br/>Press 2 if available in 2 hours.<br/>Press 3 to decline.\"] -->|\"1 - now\"| B[\"Accept Now<br/>You will perform maintenance now.\"]\nA -->|\"2 - later\"| C[\"Accept Later<br/>You will perform maintenance in 2 hours.\"]\nA -->|\"3 - decline\"| D[\"Decline<br/>Maintenance declined.\"]\nB --> E[\"Goodbye<br/>Thank you.<br/>Goodbye.\"]\nC --> E\nD --> E\nE --> F[\"Disconnect\"]"
+      },
+      "result": [
+        [
+          {
+            "label": "Maintenance Callout",
+            "log": "\"Maintenance Callout Scheduled maintenance required. Press 1 if available now. P...",
+            "playPrompt": [
+              "callflow:1274",
+              "[VOICE FILE NEEDED]",
+              "callflow:1002",
+              "callflow:1002",
+              "callflow:PRS3NEU"
+            ],
+            "playLog": [
+              "Maintenance Callout",
+              "Scheduled maintenance required",
+              "Press 1 if available now",
+              "Press 2 if available in 2 hours",
+              "Press 3 to decline"
+            ],
+            "branch": {
+              "1": "Accept Now",
+              "error": "Problems",
+              "none": "Problems"
+            },
+            "maxLoop": [
+              "Main",
+              3,
+              "Problems"
+            ],
+            "gosub": [
+              "SaveCallResult",
+              1002,
+              "Decline"
+            ]
+          },
+          {
+            "label": "Accept Now",
+            "log": "\"Accept Now You will perform maintenance now.\"...",
+            "playPrompt": [
+              "callflow:1001",
+              "callflow:1139"
+            ],
+            "playLog": [
+              "Accept Now",
+              "You will perform maintenance now"
+            ],
+            "goto": "Goodbye Thank",
+            "gosub": [
+              "SaveCallResult",
+              1001,
+              "Accept"
+            ]
+          },
+          {
+            "label": "Goodbye Thank",
+            "log": "\"Goodbye Thank you. Goodbye.\"...",
+            "playPrompt": [
+              "[VOICE FILE NEEDED]",
+              "callflow:1297",
+              "[VOICE FILE NEEDED]"
+            ],
+            "playLog": [
+              "Goodbye",
+              "Thank you",
+              "Goodbye"
+            ],
+            "goto": "hangup"
+          },
+          {
+            "label": "Hangup",
+            "log": "\"Disconnect\"...",
+            "playPrompt": [
+              "callflow:ENV_VAR"
+            ],
+            "playLog": [
+              "Disconnect"
+            ],
+            "goto": "hangup"
+          },
+          {
+            "label": "Accept Later",
+            "log": "\"Accept Later You will perform maintenance in 2 hours.\"...",
+            "playPrompt": [
+              "callflow:1001",
+              "[VOICE FILE NEEDED]"
+            ],
+            "playLog": [
+              "Accept Later",
+              "You will perform maintenance in 2 hours"
+            ],
+            "goto": "Goodbye Thank",
+            "gosub": [
+              "SaveCallResult",
+              1001,
+              "Accept"
+            ]
+          },
+          {
+            "label": "Decline Maintenance",
+            "log": "\"Decline Maintenance declined.\"...",
+            "playPrompt": [
+              "callflow:1002",
+              "callflow:1002"
+            ],
+            "playLog": [
+              "Decline",
+              "Maintenance declined"
+            ],
+            "goto": "Goodbye Thank",
+            "gosub": [
+              "SaveCallResult",
+              1002,
+              "Decline"
+            ]
+          }
+        ],
+        "module.exports = [\n    {\n        label: \"Maintenance Callout\",\n        log: \"Maintenance Callout Scheduled maintenance required. Press 1 if available now. P\",\n        playPrompt: [\n            \"callflow:1274\",\n            \"[VOICE FILE NEEDED]\",\n            \"callflow:1002\",\n            \"callflow:1002\",\n            \"callflow:PRS3NEU\"\n        ],\n        playLog: [\n            \"Maintenance Callout\",\n            \"Scheduled maintenance required\",\n            \"Press 1 if available now\",\n            \"Press 2 if available in 2 hours\",\n            \"Press 3 to decline\"\n        ],\n        branch: {\n            1: \"Accept Now\",\n            error: \"Problems\",\n            none: \"Problems\"\n        },\n        maxLoop: [\n            \"Main\",\n            3,\n            \"Problems\"\n        ],\n        gosub: [\"SaveCallResult\", 1002, \"Decline\"],\n    },\n    {\n        label: \"Accept Now\",\n        log: \"Accept Now You will perform maintenance now.\",\n        playPrompt: [\n            \"callflow:1001\",\n            \"callflow:1139\"\n        ],\n        playLog: [\n            \"Accept Now\",\n            \"You will perform maintenance now\"\n        ],\n        goto: \"Goodbye Thank\",\n        gosub: [\"SaveCallResult\", 1001, \"Accept\"],\n    },\n    {\n        label: \"Goodbye Thank\",\n        log: \"Goodbye Thank you. Goodbye.\",\n        playPrompt: [\n            \"[VOICE FILE NEEDED]\",\n            \"callflow:1297\",\n            \"[VOICE FILE NEEDED]\"\n        ],\n        playLog: [\n            \"Goodbye\",\n            \"Thank you\",\n            \"Goodbye\"\n        ],\n        goto: \"hangup\",\n    },\n    {\n        label: \"Hangup\",\n        log: \"Disconnect\",\n        playPrompt: [\n            \"callflow:ENV_VAR\"\n        ],\n        playLog: [\n            \"Disconnect\"\n        ],\n        goto: \"hangup\",\n    },\n    {\n        label: \"Accept Later\",\n        log: \"Accept Later You will perform maintenance in 2 hours.\",\n        playPrompt: [\n            \"callflow:1001\",\n            \"[VOICE FILE NEEDED]\"\n        ],\n        playLog: [\n            \"Accept Later\",\n            \"You will perform maintenance in 2 hours\"\n        ],\n        goto: \"Goodbye Thank\",\n        gosub: [\"SaveCallResult\", 1001, \"Accept\"],\n    },\n    {\n        label: \"Decline Maintenance\",\n        log: \"Decline Maintenance declined.\",\n        playPrompt: [\n            \"callflow:1002\",\n            \"callflow:1002\"\n        ],\n        playLog: [\n            \"Decline\",\n            \"Maintenance declined\"\n        ],\n        goto: \"Goodbye Thank\",\n        gosub: [\"SaveCallResult\", 1002, \"Decline\"],\n    }\n];\n"
+      ],
+      "analysis": {
+        "node_count": 6,
+        "critical_issues": [],
+        "dtmf_mappings": {
+          "1": "Accept Now"
+        },
+        "gosub_count": 4,
+        "node_labels": [
+          "Maintenance Callout",
+          "Accept Now",
+          "Goodbye Thank",
+          "Hangup",
+          "Accept Later",
+          "Decline Maintenance"
+        ]
+      },
+      "timestamp": 1753325953.9469366
+    },
+    {
+      "test_name": "Supervisor Notification Flow",
+      "scenario": {
+        "name": "Supervisor Notification Flow",
+        "description": "Supervisor acknowledgment with escalation options",
+        "expected_features": [
+          "Supervisor acknowledgment",
+          "Escalation paths",
+          "Authority checks"
+        ],
+        "mermaid": "flowchart TD\nA[\"Supervisor Notification<br/>Critical situation requires supervisor attention.<br/>Press 1 to acknowledge.<br/>Press 2 to escalate to upper management.<br/>Press 3 for more information.\"] -->|\"1 - acknowledge\"| B[\"Acknowledged<br/>Supervisor acknowledgment recorded.\"]\nA -->|\"2 - escalate\"| C[\"Escalation<br/>Escalating to upper management.\"]\nA -->|\"3 - info\"| D[\"More Info<br/>Additional information about the situation.\"]\nD -->|\"return\"| A\nB --> E[\"Goodbye<br/>Thank you.<br/>Goodbye.\"]\nC --> E\nE --> F[\"Disconnect\"]"
+      },
+      "result": [
+        [
+          {
+            "label": "Supervisor Notification",
+            "log": "\"Supervisor Notification Critical situation requires supervisor attention. Press...",
+            "playPrompt": [
+              "callflow:1302",
+              "[VOICE FILE NEEDED]",
+              "callflow:1002",
+              "callflow:1005",
+              "callflow:PRS3NEU"
+            ],
+            "playLog": [
+              "Supervisor Notification",
+              "Critical situation requires supervisor attention",
+              "Press 1 to acknowledge",
+              "Press 2 to escalate to upper management",
+              "Press 3 for more information"
+            ],
+            "branch": {
+              "no": "Acknowledged Supervisor",
+              "error": "Problems",
+              "none": "Problems"
+            },
+            "nobarge": 1,
+            "maxLoop": [
+              "Main",
+              3,
+              "Problems"
+            ]
+          },
+          {
+            "label": "Acknowledged Supervisor",
+            "log": "\"Acknowledged Supervisor acknowledgment recorded.\"...",
+            "playPrompt": [
+              "[VOICE FILE NEEDED]",
+              "[VOICE FILE NEEDED]"
+            ],
+            "playLog": [
+              "Acknowledged",
+              "Supervisor acknowledgment recorded"
+            ],
+            "goto": "Goodbye Thank"
+          },
+          {
+            "label": "Goodbye Thank",
+            "log": "\"Goodbye Thank you. Goodbye.\"...",
+            "playPrompt": [
+              "[VOICE FILE NEEDED]",
+              "callflow:1297",
+              "[VOICE FILE NEEDED]"
+            ],
+            "playLog": [
+              "Goodbye",
+              "Thank you",
+              "Goodbye"
+            ],
+            "goto": "hangup"
+          },
+          {
+            "label": "Hangup",
+            "log": "\"Disconnect\"...",
+            "playPrompt": [
+              "callflow:ENV_VAR"
+            ],
+            "playLog": [
+              "Disconnect"
+            ],
+            "goto": "hangup"
+          },
+          {
+            "label": "Escalation Escalating",
+            "log": "\"Escalation Escalating to upper management.\"...",
+            "playPrompt": [
+              "callflow:1002",
+              "callflow:1703"
+            ],
+            "playLog": [
+              "Escalation",
+              "Escalating to upper management"
+            ],
+            "goto": "Goodbye Thank"
+          },
+          {
+            "label": "More Info",
+            "log": "\"More Info Additional information about the situation.\"...",
+            "playPrompt": [
+              "callflow:1005",
+              "callflow:1232"
+            ],
+            "playLog": [
+              "More Info",
+              "Additional information about the situation"
+            ]
+          }
+        ],
+        "module.exports = [\n    {\n        label: \"Supervisor Notification\",\n        log: \"Supervisor Notification Critical situation requires supervisor attention. Press\",\n        playPrompt: [\n            \"callflow:1302\",\n            \"[VOICE FILE NEEDED]\",\n            \"callflow:1002\",\n            \"callflow:1005\",\n            \"callflow:PRS3NEU\"\n        ],\n        playLog: [\n            \"Supervisor Notification\",\n            \"Critical situation requires supervisor attention\",\n            \"Press 1 to acknowledge\",\n            \"Press 2 to escalate to upper management\",\n            \"Press 3 for more information\"\n        ],\n        branch: {\n            no: \"Acknowledged Supervisor\",\n            error: \"Problems\",\n            none: \"Problems\"\n        },\n        nobarge: 1,\n        maxLoop: [\n            \"Main\",\n            3,\n            \"Problems\"\n        ],\n    },\n    {\n        label: \"Acknowledged Supervisor\",\n        log: \"Acknowledged Supervisor acknowledgment recorded.\",\n        playPrompt: [\n            \"[VOICE FILE NEEDED]\",\n            \"[VOICE FILE NEEDED]\"\n        ],\n        playLog: [\n            \"Acknowledged\",\n            \"Supervisor acknowledgment recorded\"\n        ],\n        goto: \"Goodbye Thank\",\n    },\n    {\n        label: \"Goodbye Thank\",\n        log: \"Goodbye Thank you. Goodbye.\",\n        playPrompt: [\n            \"[VOICE FILE NEEDED]\",\n            \"callflow:1297\",\n            \"[VOICE FILE NEEDED]\"\n        ],\n        playLog: [\n            \"Goodbye\",\n            \"Thank you\",\n            \"Goodbye\"\n        ],\n        goto: \"hangup\",\n    },\n    {\n        label: \"Hangup\",\n        log: \"Disconnect\",\n        playPrompt: [\n            \"callflow:ENV_VAR\"\n        ],\n        playLog: [\n            \"Disconnect\"\n        ],\n        goto: \"hangup\",\n    },\n    {\n        label: \"Escalation Escalating\",\n        log: \"Escalation Escalating to upper management.\",\n        playPrompt: [\n            \"callflow:1002\",\n            \"callflow:1703\"\n        ],\n        playLog: [\n            \"Escalation\",\n            \"Escalating to upper management\"\n        ],\n        goto: \"Goodbye Thank\",\n    },\n    {\n        label: \"More Info\",\n        log: \"More Info Additional information about the situation.\",\n        playPrompt: [\n            \"callflow:1005\",\n            \"callflow:1232\"\n        ],\n        playLog: [\n            \"More Info\",\n            \"Additional information about the situation\"\n        ],\n    }\n];\n"
+      ],
+      "analysis": {
+        "node_count": 6,
+        "critical_issues": [],
+        "dtmf_mappings": {},
+        "gosub_count": 0,
+        "node_labels": [
+          "Supervisor Notification",
+          "Acknowledged Supervisor",
+          "Goodbye Thank",
+          "Hangup",
+          "Escalation Escalating",
+          "More Info"
+        ]
+      },
+      "timestamp": 1753325953.9668782
+    },
+    {
+      "test_name": "Simple Inbound Flow",
+      "scenario": {
+        "name": "Simple Inbound Flow",
+        "description": "Basic inbound call handling",
+        "expected_features": [
+          "Employee login",
+          "PIN verification",
+          "Main menu"
+        ],
+        "mermaid": "flowchart TD\nA[\"Welcome<br/>Welcome to the callout system.<br/>Please enter your employee ID.\"] -->|\"id entered\"| B[\"Enter PIN<br/>Please enter your 4-digit PIN.\"]\nA -->|\"invalid id\"| C[\"Invalid ID<br/>Invalid employee ID. Please try again.\"]\nC -->|\"retry\"| A\nB -->|\"correct pin\"| D[\"Main Menu<br/>Press 1 for current callouts.<br/>Press 2 for availability status.<br/>Press 3 to exit.\"]\nB -->|\"incorrect pin\"| C\nD -->|\"1 - callouts\"| E[\"Current Callouts<br/>You have no active callouts.\"]\nD -->|\"2 - status\"| F[\"Availability Status<br/>You are currently available.\"]\nD -->|\"3 - exit\"| G[\"Goodbye<br/>Thank you.<br/>Goodbye.\"]\nE --> D\nF --> D\nG --> H[\"Disconnect\"]"
+      },
+      "result": [
+        [
+          {
+            "label": "Enter",
+            "log": "\"Welcome Welcome to the callout system. Please enter your employee ID.\"...",
+            "playPrompt": [
+              "callflow:ENV_VAR",
+              "callflow:1290",
+              "callflow:1008"
+            ],
+            "playLog": [
+              "Welcome",
+              "Welcome to the callout system",
+              "Please enter your employee ID"
+            ],
+            "getDigits": {
+              "numDigits": 1,
+              "maxTries": 3,
+              "maxTime": 7,
+              "validChoices": "1|2|3|4|5|6|7|8|9|0",
+              "errorPrompt": "callflow:1009",
+              "nonePrompt": "callflow:1009"
+            },
+            "branch": {
+              "id entered": "Enter PIN",
+              "invalid id": "Invalid Id",
+              "\"id entered\"": "Enter PIN",
+              "\"invalid id\"": "Invalid Id",
+              "error": "Invalid Entry",
+              "none": "Problems"
+            }
+          },
+          {
+            "label": "Enter PIN",
+            "log": "\"Enter PIN Please enter your 4-digit PIN.\"...",
+            "playPrompt": [
+              "callflow:1008",
+              "callflow:1008"
+            ],
+            "playLog": [
+              "Enter PIN",
+              "Please enter your 4-digit PIN"
+            ],
+            "getDigits": {
+              "numDigits": 4,
+              "maxTries": 3,
+              "maxTime": 7,
+              "validChoices": "{{pin}}",
+              "errorPrompt": "callflow:1009",
+              "nonePrompt": "callflow:1009"
+            },
+            "branch": {
+              "1": "Enter PIN",
+              "next": "After PIN"
+            },
+            "branchOn": "{{pin_req}}"
+          },
+          {
+            "label": "Main Menu",
+            "log": "\"Main Menu Press 1 for current callouts. Press 2 for availability status. Press ...",
+            "playPrompt": [
+              "callflow:1004",
+              "callflow:1002",
+              "callflow:1002",
+              "callflow:PRS3NEU"
+            ],
+            "playLog": [
+              "Main Menu",
+              "Press 1 for current callouts",
+              "Press 2 for availability status",
+              "Press 3 to exit"
+            ],
+            "branch": {
+              "error": "Problems",
+              "none": "Problems"
+            },
+            "maxLoop": [
+              "Main",
+              3,
+              "Problems"
+            ]
+          },
+          {
+            "label": "Current Callouts",
+            "log": "\"Current Callouts You have no active callouts.\"...",
+            "playPrompt": [
+              "callflow:CURR_TIME",
+              "callflow:1297"
+            ],
+            "playLog": [
+              "Current Callouts",
+              "You have no active callouts"
+            ],
+            "goto": "hangup"
+          },
+          {
+            "label": "Availability Status",
+            "log": "\"Availability Status You are currently available.\"...",
+            "playPrompt": [
+              "[VOICE FILE NEEDED]",
+              "callflow:1351"
+            ],
+            "playLog": [
+              "Availability Status",
+              "You are currently available"
+            ],
+            "goto": "hangup"
+          },
+          {
+            "label": "Goodbye Thank",
+            "log": "\"Goodbye Thank you. Goodbye.\"...",
+            "playPrompt": [
+              "[VOICE FILE NEEDED]",
+              "callflow:1297",
+              "[VOICE FILE NEEDED]"
+            ],
+            "playLog": [
+              "Goodbye",
+              "Thank you",
+              "Goodbye"
+            ],
+            "goto": "hangup"
+          },
+          {
+            "label": "Hangup",
+            "log": "\"Disconnect\"...",
+            "playPrompt": [
+              "callflow:ENV_VAR"
+            ],
+            "playLog": [
+              "Disconnect"
+            ],
+            "goto": "hangup"
+          },
+          {
+            "label": "Invalid Id",
+            "log": "\"Invalid ID Invalid employee ID. Please try again.\"...",
+            "playPrompt": [
+              "callflow:1009",
+              "callflow:1009",
+              "callflow:1017"
+            ],
+            "playLog": [
+              "Invalid ID",
+              "Invalid employee ID",
+              "Please try again"
+            ],
+            "branch": {
+              "error": "Enter",
+              "none": "Problems"
+            },
+            "maxLoop": [
+              "Loop-Invalid Entry",
+              5,
+              "Problems"
+            ],
+            "getDigits": {
+              "errorPrompt": "callflow:1009",
+              "nonePrompt": "callflow:1009"
+            },
+            "nobarge": 1
+          }
+        ],
+        "module.exports = [\n    {\n        label: \"Enter\",\n        log: \"Welcome Welcome to the callout system. Please enter your employee ID.\",\n        playPrompt: [\n            \"callflow:ENV_VAR\",\n            \"callflow:1290\",\n            \"callflow:1008\"\n        ],\n        playLog: [\n            \"Welcome\",\n            \"Welcome to the callout system\",\n            \"Please enter your employee ID\"\n        ],\n        getDigits: {\n            numDigits: 1,\n            maxTries: 3,\n            maxTime: 7,\n            validChoices: \"1|2|3|4|5|6|7|8|9|0\",\n            errorPrompt: \"callflow:1009\",\n            nonePrompt: \"callflow:1009\"\n        },\n        branch: {\n            id entered: \"Enter PIN\",\n            invalid id: \"Invalid Id\",\n            \"id entered\": \"Enter PIN\",\n            \"invalid id\": \"Invalid Id\",\n            error: \"Invalid Entry\",\n            none: \"Problems\"\n        },\n    },\n    {\n        label: \"Enter PIN\",\n        log: \"Enter PIN Please enter your 4-digit PIN.\",\n        playPrompt: [\n            \"callflow:1008\",\n            \"callflow:1008\"\n        ],\n        playLog: [\n            \"Enter PIN\",\n            \"Please enter your 4-digit PIN\"\n        ],\n        getDigits: {\n            numDigits: 4,\n            maxTries: 3,\n            maxTime: 7,\n            validChoices: \"{{pin}}\",\n            errorPrompt: \"callflow:1009\",\n            nonePrompt: \"callflow:1009\"\n        },\n        branch: {\n            1: \"Enter PIN\",\n            next: \"After PIN\"\n        },\n        branchOn: \"{{pin_req}}\",\n    },\n    {\n        label: \"Main Menu\",\n        log: \"Main Menu Press 1 for current callouts. Press 2 for availability status. Press\",\n        playPrompt: [\n            \"callflow:1004\",\n            \"callflow:1002\",\n            \"callflow:1002\",\n            \"callflow:PRS3NEU\"\n        ],\n        playLog: [\n            \"Main Menu\",\n            \"Press 1 for current callouts\",\n            \"Press 2 for availability status\",\n            \"Press 3 to exit\"\n        ],\n        branch: {\n            error: \"Problems\",\n            none: \"Problems\"\n        },\n        maxLoop: [\n            \"Main\",\n            3,\n            \"Problems\"\n        ],\n    },\n    {\n        label: \"Current Callouts\",\n        log: \"Current Callouts You have no active callouts.\",\n        playPrompt: [\n            \"callflow:CURR_TIME\",\n            \"callflow:1297\"\n        ],\n        playLog: [\n            \"Current Callouts\",\n            \"You have no active callouts\"\n        ],\n        goto: \"hangup\",\n    },\n    {\n        label: \"Availability Status\",\n        log: \"Availability Status You are currently available.\",\n        playPrompt: [\n            \"[VOICE FILE NEEDED]\",\n            \"callflow:1351\"\n        ],\n        playLog: [\n            \"Availability Status\",\n            \"You are currently available\"\n        ],\n        goto: \"hangup\",\n    },\n    {\n        label: \"Goodbye Thank\",\n        log: \"Goodbye Thank you. Goodbye.\",\n        playPrompt: [\n            \"[VOICE FILE NEEDED]\",\n            \"callflow:1297\",\n            \"[VOICE FILE NEEDED]\"\n        ],\n        playLog: [\n            \"Goodbye\",\n            \"Thank you\",\n            \"Goodbye\"\n        ],\n        goto: \"hangup\",\n    },\n    {\n        label: \"Hangup\",\n        log: \"Disconnect\",\n        playPrompt: [\n            \"callflow:ENV_VAR\"\n        ],\n        playLog: [\n            \"Disconnect\"\n        ],\n        goto: \"hangup\",\n    },\n    {\n        label: \"Invalid Id\",\n        log: \"Invalid ID Invalid employee ID. Please try again.\",\n        playPrompt: [\n            \"callflow:1009\",\n            \"callflow:1009\",\n            \"callflow:1017\"\n        ],\n        playLog: [\n            \"Invalid ID\",\n            \"Invalid employee ID\",\n            \"Please try again\"\n        ],\n        branch: {\n            error: \"Enter\",\n            none: \"Problems\"\n        },\n        maxLoop: [\n            \"Loop-Invalid Entry\",\n            5,\n            \"Problems\"\n        ],\n        getDigits: {\n            errorPrompt: \"callflow:1009\",\n            nonePrompt: \"callflow:1009\"\n        },\n        nobarge: 1,\n    }\n];\n"
+      ],
+      "analysis": {
+        "node_count": 8,
+        "critical_issues": [],
+        "dtmf_mappings": {
+          "1": "Enter PIN"
+        },
+        "gosub_count": 0,
+        "node_labels": [
+          "Enter",
+          "Enter PIN",
+          "Main Menu",
+          "Current Callouts",
+          "Availability Status",
+          "Goodbye Thank",
+          "Hangup",
+          "Invalid Id"
+        ]
+      },
+      "timestamp": 1753325953.993112
+    }
+  ],
+  "timestamp": 1753325953.9931328
+}

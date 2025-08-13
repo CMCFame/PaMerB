@@ -1,0 +1,101 @@
+{
+  "node_count": 23,
+  "nodes": [
+    {
+      "label": "Live Answer",
+      "type": "message"
+    },
+    {
+      "label": null,
+      "type": "message"
+    },
+    {
+      "label": null,
+      "type": "decision"
+    },
+    {
+      "label": "Employee",
+      "type": "message"
+    },
+    {
+      "label": "Invalid Entry",
+      "type": "decision"
+    },
+    {
+      "label": "Enter",
+      "type": "decision"
+    },
+    {
+      "label": "\"Correct Pin",
+      "type": "decision"
+    },
+    {
+      "label": "Electric Callout",
+      "type": "message"
+    },
+    {
+      "label": "Callout Reason",
+      "type": "message"
+    },
+    {
+      "label": "Trouble Location",
+      "type": "message"
+    },
+    {
+      "label": "Custom Message",
+      "type": "message"
+    },
+    {
+      "label": "\"Available For Callout",
+      "type": "decision"
+    },
+    {
+      "label": "Confirm Accept",
+      "type": "decision"
+    },
+    {
+      "label": "Invalid_Response",
+      "type": "message"
+    },
+    {
+      "label": "Accept",
+      "type": "message"
+    },
+    {
+      "label": "Goodbye Thank",
+      "type": "message"
+    },
+    {
+      "label": "Hangup",
+      "type": "message"
+    },
+    {
+      "label": "Callout Decline",
+      "type": "message"
+    },
+    {
+      "label": "Qualified You",
+      "type": "message"
+    },
+    {
+      "label": "Confirm QualNo",
+      "type": "decision"
+    },
+    {
+      "label": "Invalid_Response",
+      "type": "message"
+    },
+    {
+      "label": "Second Message",
+      "type": "message"
+    },
+    {
+      "label": "Have",
+      "type": "message"
+    }
+  ],
+  "welcome_node_found": true,
+  "accept_found": true,
+  "decline_found": true,
+  "gosub_count": 2
+}
