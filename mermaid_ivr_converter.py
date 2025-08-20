@@ -360,10 +360,11 @@ class FlexibleARCOSConverter:
             ("to confirm receipt of the msg, press1. to replay the msg press 3", "1035"),
             
             # Core callflow elements (from allflows LITE)
-            ("This is an", "1191"),  # Primary greeting
-            ("callout", "1274"),     # Callout noun
-            ("from", "1589"),        # Location connector
-            ("It is", "1231"),       # Time introducer
+            ("This is a", "1210"),    # Primary greeting - FIXED
+            ("This is an", "1191"),   # Alternative greeting
+            ("callout", "1274"),      # Callout noun
+            ("from", "1192"),         # Location connector - FIXED
+            ("It is", "1231"),        # Time introducer
             ("Press 1 if this is", "1002"),
             ("if you need more time to get", "1005"),
             ("to the phone", "1006"),
@@ -384,6 +385,29 @@ class FlexibleARCOSConverter:
             ("Problems", "1351"),
             ("I'm sorry you are having problems", "1351"),
             
+            # Missing voice files from lead programmer feedback
+            ("There is a", "1011"),
+            ("scheduled for", "1400"),
+            ("ending on", "1190"),
+            ("The location of the work is", "2808"),
+            ("You are being called out as a", "2145"),
+            ("To bypass this answering machine message and respond to this callout you may press 1 or call the", "1207"),
+            ("Thank you, good bye", "1029"),
+            ("The system is currently calling another employee", "1481"),
+            ("To respond to this callout", "1482"),
+            ("please call the", "1352"),
+            ("An accepted response has been recorded", "1167"),
+            ("Your response has been recorded as a decline", "1021"),
+            ("You pressed 1 to accept, Please press 1 again to confirm", "1366"),
+            ("You pressed 3 to decline, please press 3 again to confirm", "1291"),
+            ("Are you available to work this callout?", "2070"),
+            ("If Yes, press 1. If No, press 3", "2171"),
+            ("If no one else accepts, and you want to be called again", "2173"),
+            ("You pressed 5 to be called again if no one else at your center accepts", "2756"),
+            ("Please press 5 again to confirm", "1841"),
+            ("Your response is being recorded as a qualified no", "1354"),
+            ("You may be called again if no one else at your center accepts", "2005"),
+            
             # PIN and validation
             ("Your PIN cannot be", "1139"),
             ("Please enter your new four digit PIN", "1097"),
@@ -398,6 +422,7 @@ class FlexibleARCOSConverter:
             ("Press 9", "PRS9NEU"),
             ("Press 1", "PRS1NEU"),
             ("Press 3", "PRS3NEU"),
+            ("Press 5", "PRS5DWN"),
             
             # Response confirmations
             ("Accept", "1001"),
@@ -540,6 +565,9 @@ class FlexibleARCOSConverter:
         
         # Remove unnecessary nodes for inbound flows (based on developer feedback)
         ivr_flow = self._clean_inbound_flow_nodes(ivr_flow)
+        
+        # Add essential missing nodes that are always needed (based on lead programmer feedback)
+        ivr_flow = self._add_essential_nodes(ivr_flow)
         
         # Generate JavaScript output
         js_output = self._generate_javascript_output(ivr_flow)
@@ -734,16 +762,22 @@ class FlexibleARCOSConverter:
         
         # Base node structure
         ivr_node = {
-            "label": meaningful_label,
-            "log": f"{node_text.replace('\n', ' ')[:80]}..."
+            "label": meaningful_label
         }
         
         # Generate voice prompts and logs
         play_prompts, play_logs = self._generate_flexible_prompts_and_logs(node_text, meaningful_label)
         if play_prompts:
             ivr_node["playPrompt"] = play_prompts
-        if play_logs:
+        
+        # Use playLog array if available, otherwise use single log entry
+        if play_logs and len(play_logs) > 1:
             ivr_node["playLog"] = play_logs
+        elif play_logs and len(play_logs) == 1:
+            ivr_node["log"] = play_logs[0]
+        else:
+            # Fallback to simple log
+            ivr_node["log"] = f"{node_text.replace('\n', ' ')[:80]}..."
         
         # FLEXIBLE node type detection
         node_type = self._detect_node_type_flexible(node_text, node_connections)
@@ -751,7 +785,23 @@ class FlexibleARCOSConverter:
         if node_type == 'decision':
             # Decision node - needs branches
             decision_data = self._create_decision_node_flexible(node_text, node_connections, node_id_to_label)
-            ivr_node.update(decision_data)
+            
+            # SYSTEMATIC: Handle loop control decisions
+            if isinstance(decision_data, dict) and decision_data.get('loop_control'):
+                print("SYSTEMATIC: Converting loop control decision to maxLoop logic")
+                # This is a loop control node - we need to apply maxLoop to the source node
+                # Store loop information for later processing
+                loop_info = {
+                    'type': decision_data['loop_type'],
+                    'target': decision_data.get('loop_target'),
+                    'exit': decision_data.get('exit_target', 'Goodbye')
+                }
+                # Mark this node for special processing
+                ivr_node["_loop_control"] = loop_info
+                # Don't add regular branch logic for loop control nodes
+                return ivr_node
+            else:
+                ivr_node.update(decision_data)
             
             # Special handling for employee verification decision nodes
             if any(pattern in node_text.lower() for pattern in ['this is employee', 'this is the employee', 'employee verification', 'verify employee']):
@@ -844,12 +894,31 @@ class FlexibleARCOSConverter:
         self._add_enhanced_error_handling(ivr_node, node_text, label, node_type)
 
     def _detect_node_type_flexible(self, node_text: str, connections: List[Dict]) -> str:
-        """FLEXIBLE node type detection"""
+        """SYSTEMATIC node type detection with connection analysis"""
         text_lower = node_text.lower()
+        
+        # SYSTEMATIC: Check connection labels for input patterns
+        has_input_connection = False
+        has_multiple_direct_connections = len([c for c in connections if not c.get('label', '').strip()]) > 2
+        
+        for conn in connections:
+            label = conn.get('label', '').lower()
+            if 'input' in label and any(char.isdigit() for char in label):
+                has_input_connection = True
+                print(f"SYSTEMATIC: Detected input connection pattern: {label}")
+                break
+        
+        # SYSTEMATIC: Input detection - either text patterns or connection patterns
+        if any(phrase in text_lower for phrase in ['enter your', 'please enter', 're-enter', 'followed by']):
+            return 'input'
+        elif has_input_connection:
+            return 'input'  # Node has input connection pattern
         
         # Welcome/main entry detection (critical for electric callout)
         if ('press 1' in text_lower and 'press 3' in text_lower and 'press 7' in text_lower and 'press 9' in text_lower):
             return 'welcome'  # This is the main welcome node with all DTMF options
+        elif has_multiple_direct_connections:
+            return 'welcome'  # Node with multiple direct connections is likely a welcome/menu
         
         # Main Menu detection - menu with press options but not the main welcome
         if ('press 1' in text_lower and 'press 2' in text_lower and 'press 3' in text_lower) or \
@@ -864,10 +933,6 @@ class FlexibleARCOSConverter:
         # Decision indicators
         if '?' in node_text or any(word in text_lower for word in ['match', 'valid', 'correct', 'entered digits']):
             return 'decision'
-        
-        # Input indicators
-        if any(phrase in text_lower for phrase in ['enter your', 'please enter', 're-enter', 'followed by']):
-            return 'input'
         
         # Welcome indicators (flexible) - callout pattern with connections
         if any(phrase in text_lower for phrase in ['welcome', 'this is.*callout', 'hello', 'greeting']) and len(connections) > 2:
@@ -886,13 +951,35 @@ class FlexibleARCOSConverter:
         return 'message'
 
     def _create_decision_node_flexible(self, text: str, connections: List[Dict], node_id_to_label: Dict[str, str]) -> Dict:
-        """Create decision node - FLEXIBLE approach"""
+        """Create decision node - SYSTEMATIC approach for all patterns"""
         branch_map = {}
+        text_lower = text.lower()
         
         print(f"PROCESSING: Decision node processing {len(connections)} connections...")
         
-        # Check if this is an employee verification decision node
-        is_employee_verification = any(pattern in text.lower() for pattern in ['this is employee', 'this is the employee', 'employee verification', 'verify employee'])
+        # SYSTEMATIC: Detect loop control patterns
+        is_loop_control = any(pattern in text_lower for pattern in [
+            'played', 'times', 'loop', 'repeat', 'again', 'tries', 'attempts'
+        ])
+        
+        # SYSTEMATIC: Detect employee verification patterns  
+        is_employee_verification = any(pattern in text_lower for pattern in [
+            'this is employee', 'this is the employee', 'employee verification', 'verify employee'
+        ])
+        
+        print(f"DETECTED: Loop control: {is_loop_control}, Employee verification: {is_employee_verification}")
+        
+        # SYSTEMATIC: Handle loop control nodes specially
+        if is_loop_control:
+            print("SYSTEMATIC: Processing loop control decision - converting to maxLoop logic")
+            # For loop control nodes, we typically want to return a special marker
+            # The calling code should detect this and add maxLoop to the source node
+            return {
+                "loop_control": True,
+                "loop_type": "answering_machine" if "played" in text_lower else "retry",
+                "loop_target": connections[0]['target'] if connections else None,
+                "exit_target": connections[1]['target'] if len(connections) > 1 else "Goodbye"
+            }
         
         # Map connections based on labels
         for conn in connections:
@@ -901,15 +988,15 @@ class FlexibleARCOSConverter:
             
             print(f"CONNECTING: Processing decision connection: '{label}' -> {target_label}")
             
-            # Special handling for employee verification nodes
+            # SYSTEMATIC: Handle employee verification nodes - USE NUMERIC KEYS
             if is_employee_verification:
-                # Employee verification should only have yes/no responses, not direct DTMF mappings
-                if 'yes' in label:
-                    branch_map['yes'] = target_label
-                    print(f"MAPPED: Employee verification YES -> {target_label}")
-                elif 'no' in label or 'retry' in label:
-                    branch_map['no'] = target_label
-                    print(f"MAPPED: Employee verification NO -> {target_label}")
+                # Employee verification should use DTMF numeric keys, not yes/no
+                if 'yes' in label or '1' in label:
+                    branch_map['1'] = target_label
+                    print(f"MAPPED: Employee verification 1 (yes) -> {target_label}")
+                elif 'no' in label or '0' in label or 'retry' in label:
+                    branch_map['0'] = target_label
+                    print(f"MAPPED: Employee verification 0 (no) -> {target_label}")
                 continue
             
             # Enhanced branch mapping based on developer feedback
@@ -948,16 +1035,69 @@ class FlexibleARCOSConverter:
         
         print(f"RESULT: Decision branch map: {branch_map}")
         
-        return {"branch": branch_map}
+        # Add getDigits configuration for proper DTMF collection
+        # Extract valid choices from branch map (only numeric keys)
+        valid_choices = [key for key in branch_map.keys() if key.isdigit()]
+        
+        decision_node = {
+            "branch": branch_map
+        }
+        
+        # Add getDigits only if we have numeric choices
+        if valid_choices:
+            decision_node["getDigits"] = {
+                "numDigits": 1,
+                "maxTime": 7,
+                "validChoices": "|".join(sorted(valid_choices)),
+                "errorPrompt": "callflow:1009",
+                "nonePrompt": "callflow:1009"
+            }
+        
+        return decision_node
 
     def _create_input_node_flexible(self, text: str, connections: List[Dict], node_id_to_label: Dict[str, str]) -> Dict:
-        """Create input node - FLEXIBLE approach"""
+        """Create input node - SYSTEMATIC approach"""
         text_lower = text.lower()
         
-        # Determine input type
+        # SYSTEMATIC: Extract DTMF choices from connection labels first
+        input_choices = set()
+        branch_map = {}
+        
+        for conn in connections:
+            label = conn.get('label', '').strip()
+            target_label = node_id_to_label.get(conn['target'], 'hangup')
+            
+            print(f"SYSTEMATIC: Processing input connection: '{label}' -> {target_label}")
+            
+            # Extract digits from input labels
+            if 'input' in label.lower():
+                # Pattern like "Input - 1, 3, 7, or 9"
+                digits = re.findall(r'\b(\d)\b', label)
+                input_choices.update(digits)
+                print(f"SYSTEMATIC: Extracted DTMF choices from input: {digits}")
+                
+                # All these choices typically go to the same target in answering machine scenarios
+                for digit in digits:
+                    branch_map[digit] = target_label
+                    print(f"MAPPED: Choice {digit} -> {target_label}")
+            elif label:
+                # Handle other labeled connections
+                digit_match = re.search(r'\b(\d)\b', label)
+                if digit_match:
+                    digit = digit_match.group(1)
+                    input_choices.add(digit)
+                    branch_map[digit] = target_label
+                    print(f"MAPPED: Choice {digit} (from label) -> {target_label}")
+        
+        # SYSTEMATIC: Determine input configuration based on content analysis
         if 'pin' in text_lower:
             num_digits = 5 if 'pound' in text_lower else 4
             valid_choices = "{{pin}}"
+        elif input_choices:
+            # Use the detected DTMF choices
+            num_digits = 1
+            valid_choices = "|".join(sorted(input_choices))
+            print(f"SYSTEMATIC: Generated validChoices from connections: {valid_choices}")
         elif 'digit' in text_lower:
             # Extract number of digits
             digit_match = re.search(r'(\d+)\s*digit', text_lower)
@@ -965,26 +1105,13 @@ class FlexibleARCOSConverter:
             valid_choices = "0|1|2|3|4|5|6|7|8|9"
         else:
             num_digits = 1
-            valid_choices = "1|2|3|4|5|6|7|8|9|0"
-        
-        # Build branch map
-        branch_map = {}
-        for conn in connections:
-            label = conn.get('label', '').lower()
-            target_label = node_id_to_label.get(conn['target'], 'hangup')
-            
-            if 'yes' in label:
-                branch_map[valid_choices] = target_label
-            elif 'no' in label or 'error' in label:
-                branch_map['error'] = target_label
-            elif label:
-                clean_label = clean_branch_key(label)
-                if clean_label:  # Only add if cleaning didn't remove everything
-                    branch_map[clean_label] = target_label
+            valid_choices = "1|3|7|9"  # Common answering machine choices
         
         # Add defaults
         if 'error' not in branch_map:
             branch_map['error'] = 'Invalid Entry'
+        if 'none' not in branch_map:
+            branch_map['none'] = 'Invalid Entry'
         
         return {
             "getDigits": {
@@ -1011,38 +1138,76 @@ class FlexibleARCOSConverter:
         print(f"PROCESSING: Welcome node processing {len(connections)} connections...")
         print(f"DETECTED: DTMF choices in text: {choices}")
         
-        # Map connections based on labels and targets
+        # SYSTEMATIC: Map connections based on actual diagram structure
+        direct_connections = []  # For direct arrows without labels
+        labeled_connections = []  # For labeled arrows
+        
         for conn in connections:
-            label = conn.get('label', '').lower()
+            label = conn.get('label', '').strip()
             target_label = node_id_to_label.get(conn['target'], 'hangup')
             
             print(f"CONNECTING: Processing connection: '{label}' -> {target_label}")
             
-            # Enhanced mapping logic - prioritize exact "input" connection
-            if label == 'input' or label == '"input"':
-                branch_map['1'] = target_label  # Choice 1: Employee verification (from input connection)
-                print(f"MAPPED: Choice 1 (input connection) -> {target_label}")
-            elif 'input' in label and 'no input' not in label:
-                branch_map['1'] = target_label  # Choice 1: Employee verification
-                print(f"MAPPED: Choice 1 (employee) -> {target_label}")
-            elif ('3' in label and 'need more time' in label) or ('3' in label and 'time' in target_label.lower()):
-                branch_map['3'] = target_label  # Choice 3: Need more time
+            if not label:
+                # Direct connection - these become menu choices automatically
+                direct_connections.append((target_label, conn['target']))
+                print(f"DETECTED: Direct connection -> {target_label}")
+            else:
+                labeled_connections.append((label.lower(), target_label))
+                print(f"DETECTED: Labeled connection '{label}' -> {target_label}")
+        
+        # SYSTEMATIC: Handle direct connections by assigning sequential numbers
+        if direct_connections:
+            print(f"SYSTEMATIC: Processing {len(direct_connections)} direct connections as menu choices")
+            for i, (target_label, target_id) in enumerate(direct_connections, 1):
+                if i <= 9:  # Limit to single digit choices
+                    branch_map[str(i)] = target_label
+                    print(f"MAPPED: Choice {i} -> {target_label}")
+        
+        # SYSTEMATIC: Handle labeled connections with flexible parsing
+        for label, target_label in labeled_connections:
+            # Check for explicit DTMF numbers first
+            digit_match = re.search(r'\b(\d)\b', label)
+            if digit_match:
+                num = digit_match.group(1)
+                branch_map[num] = target_label
+                print(f"MAPPED: Choice {num} (from label) -> {target_label}")
+                continue
+            
+            # Handle special input patterns
+            if label == 'input' or '"input"' in label or 'input - ' in label:
+                # Extract DTMF choices from input label
+                input_choices = re.findall(r'\b(\d)\b', label)
+                if input_choices:
+                    # Map each detected choice to the same target (common pattern)
+                    for choice in input_choices:
+                        branch_map[choice] = target_label
+                        print(f"MAPPED: Choice {choice} (from input) -> {target_label}")
+                else:
+                    # Default input mapping
+                    branch_map['1'] = target_label
+                    print(f"MAPPED: Choice 1 (default input) -> {target_label}")
+                continue
+            
+            # Handle standard IVR patterns
+            if 'need more time' in label or 'time' in label:
+                branch_map['3'] = target_label
                 print(f"MAPPED: Choice 3 (need time) -> {target_label}")
-            elif ('7' in label and 'not home' in label) or ('7' in label and 'home' in target_label.lower()):
-                branch_map['7'] = target_label  # Choice 7: Not home
+            elif 'not home' in label or 'home' in label:
+                branch_map['7'] = target_label
                 print(f"MAPPED: Choice 7 (not home) -> {target_label}")
-            elif ('9' in label and 'repeat' in label) or ('retry logic' in label):
-                branch_map['9'] = target_label  # Choice 9: Repeat/retry
+            elif 'repeat' in label or 'retry' in label:
+                branch_map['9'] = target_label
                 print(f"MAPPED: Choice 9 (repeat) -> {target_label}")
-            elif 'no input' in label:
-                branch_map['error'] = target_label  # No input handling
+            elif 'no input' in label or 'none' in label:
+                branch_map['error'] = target_label
                 print(f"MAPPED: No input -> {target_label}")
-            elif re.search(r'\b(\d)\b', label):
-                # General number mapping
-                num = re.search(r'\b(\d)\b', label).group(1)
-                if num in ['1', '3', '7', '9']:
-                    branch_map[num] = target_label
-                    print(f"MAPPED: Choice {num} -> {target_label}")
+            elif 'yes' in label:
+                branch_map['1'] = target_label
+                print(f"MAPPED: Choice 1 (yes) -> {target_label}")
+            elif 'no' in label:
+                branch_map['0'] = target_label
+                print(f"MAPPED: Choice 0 (no) -> {target_label}")
         
         # Add required defaults matching allflows LITE pattern
         if 'error' not in branch_map:
@@ -1075,6 +1240,12 @@ class FlexibleARCOSConverter:
         }
         welcome_sections.append(section2)
         
+        # SYSTEMATIC: Generate validChoices based on actual branch map
+        valid_dtmf_choices = [key for key in branch_map.keys() if key.isdigit()]
+        valid_choices_string = "|".join(sorted(valid_dtmf_choices)) if valid_dtmf_choices else "1|3|7|9"
+        
+        print(f"SYSTEMATIC: Generated validChoices: {valid_choices_string}")
+        
         # Section 3: Main choice menu with getDigits
         section3 = {
             "label": "Main Menu",
@@ -1083,9 +1254,10 @@ class FlexibleARCOSConverter:
             "playPrompt": prompts[3:] if len(prompts) > 3 else prompts,
             "getDigits": {
                 "numDigits": 1,
-                "maxTime": 1,  # Short timeout like allflows LITE
-                "validChoices": "1|3|7|9",  # Fixed choices for electric callout
-                "errorPrompt": "callflow:1009"
+                "maxTime": 7,  # Standard timeout for menu selection
+                "validChoices": valid_choices_string,
+                "errorPrompt": "callflow:1009",
+                "nonePrompt": "callflow:1009"
             },
             "branch": branch_map
         }
@@ -1287,6 +1459,43 @@ class FlexibleARCOSConverter:
                 'pattern': r'call.*system.*at.*phone',
                 'prompts': ["callflow:1174", "callflow:1290", "callflow:1015", "digits:{{callback_number}}"],
                 'logs': ["call the", "callout system", "at", "speak phone number"]
+            },
+            
+            # Production patterns from lead programmer feedback
+            {
+                'pattern': r'this is a.*scheduled overtime.*callout from.*virginia american water',
+                'prompts': ["callflow:1210", "type:{{callout_type}}", "callflow:1192", "company:1201"],
+                'logs': ["This is a", "Scheduled Overtime", "callout from", "Virginia American Water"]
+            },
+            {
+                'pattern': r'it is.*current date and time',
+                'prompts': ["callflow:1231", "current: dow, date, time"],
+                'logs': ["It is", "Speak current date and time"]
+            },
+            {
+                'pattern': r'there is a.*callout.*scheduled for',
+                'prompts': ["callflow:1011", "company:{{company_id}}", "type:{{callout_type}}", "callflow:1274", "callflow:1400"],
+                'logs': ["There is a", "Company name", "Callout type", "callout", "scheduled for"]
+            },
+            {
+                'pattern': r'speaks dow.*speaks date.*speaks time',
+                'prompts': ["dow: {{job_start_date}}", "date: {{job_start_date}}", "time: {{job_start_time}}"],
+                'logs': ["Speaks dow of callout", "Speaks date of callout", "Speaks time of callout"]
+            },
+            {
+                'pattern': r'ending on.*end dow.*end date.*end time',
+                'prompts': ["callflow:1190", "dow: {{job_end_date}}", "date: {{job_end_date}}", "time: {{job_end_time}}"],
+                'logs': ["ending on", "Speaks end dow of callout", "Speaks end date of callout", "Speaks end time of callout"]
+            },
+            {
+                'pattern': r'the location of the work is',
+                'prompts': ["callflow:2808", "location:{{callout_location}}"],
+                'logs': ["The location of the work is", "Location spoken"]
+            },
+            {
+                'pattern': r'you are being called out as a',
+                'prompts': ["callflow:2145", "class:{{job_classification}}"],
+                'logs': ["You are being called out as a", "Job classification spoken"]
             }
         ]
         
@@ -1707,6 +1916,126 @@ class FlexibleARCOSConverter:
         
         js_output += "];\n"
         return js_output
+
+    def _add_essential_nodes(self, ivr_flow: List[Dict]) -> List[Dict]:
+        """Add essential nodes that are always needed based on lead programmer feedback"""
+        existing_labels = {node.get('label', '') for node in ivr_flow}
+        
+        # Check if we need PIN logic
+        has_pin_requirement = any('pin' in node.get('label', '').lower() or 
+                                'pin' in str(node.get('playPrompt', '')).lower() 
+                                for node in ivr_flow)
+        
+        # Add Check PIN node if PIN logic is detected
+        if has_pin_requirement and 'Check PIN' not in existing_labels:
+            check_pin_node = {
+                "label": "Check PIN",
+                "branchOn": "{{pin_req}}",
+                "branch": {
+                    "1": "Enter PIN",
+                    "next": "Callout"
+                }
+            }
+            ivr_flow.append(check_pin_node)
+            
+            # Add Enter PIN node
+            enter_pin_node = {
+                "label": "Enter PIN",
+                "log": "Please enter your four digit PIN followed by the pound key",
+                "playPrompt": "callflow:1008",
+                "getDigits": {
+                    "numDigits": 5,
+                    "maxTries": 3,
+                    "maxTime": 7,
+                    "validChoices": "{{pin}}",
+                    "errorPrompt": "callflow:1009",
+                    "nonePrompt": "callflow:1009"
+                },
+                "branch": {
+                    "error": "Problems",
+                    "none": "Problems"
+                }
+            }
+            ivr_flow.append(enter_pin_node)
+        
+        # Add Problems node if not present (ALWAYS needed)
+        if 'Problems' not in existing_labels:
+            problems_node = {
+                "label": "Problems",
+                "gosub": ["SaveCallResult", 1198, "Error Out"]
+            }
+            ivr_flow.append(problems_node)
+            
+            # Add the error message part
+            problems_message_node = {
+                "nobarge": 1,
+                "playLog": [
+                    "I'm sorry you are having problems.",
+                    "Please have",
+                    "Employee name",
+                    "call the",
+                    "Company name",
+                    "callout system",
+                    "at",
+                    "speak phone num"
+                ],
+                "playPrompt": [
+                    "callflow:1351",
+                    "callflow:1017",
+                    "names:{{contact_id}}",
+                    "callflow:1174",
+                    "company:{{company_id}}",
+                    "callflow:1290",
+                    "callflow:1015",
+                    "digits:{{callback_number}}"
+                ],
+                "goto": "Goodbye"
+            }
+            ivr_flow.append(problems_message_node)
+        
+        # Add Goodbye node if not present (ALWAYS needed)
+        if 'Goodbye' not in existing_labels:
+            goodbye_node = {
+                "label": "Goodbye",
+                "log": "Goodbye(1029)",
+                "playPrompt": "callflow:1029",
+                "nobarge": 1,
+                "goto": "hangup"
+            }
+            ivr_flow.append(goodbye_node)
+        
+        # Add Intercept node for outbound calls
+        has_outbound_patterns = any('callout' in node.get('label', '').lower() or 
+                                   'answering machine' in node.get('label', '').lower()
+                                   for node in ivr_flow)
+        
+        if has_outbound_patterns and 'Intercept' not in existing_labels:
+            intercept_node = {
+                "label": "Intercept",
+                "nobarge": 1,
+                "playLog": [
+                    "The system is currently calling another employee",
+                    "To respond to this callout",
+                    "please call the",
+                    "Company name",
+                    "callout system",
+                    "at",
+                    "speak phone number"
+                ],
+                "playPrompt": [
+                    "callflow:1481",
+                    "callflow:1482",
+                    "callflow:1352",
+                    "company:{{company_id}}",
+                    "callflow:1290",
+                    "callflow:1015",
+                    "digits:{{callback_number}}"
+                ],
+                "goto": "Goodbye"
+            }
+            ivr_flow.append(intercept_node)
+        
+        return ivr_flow
 
 
 def convert_mermaid_to_ivr(mermaid_code: str, cf_general_csv=None, arcos_csv=None, use_dynamodb=True) -> Tuple[List[Dict], str]:

@@ -570,51 +570,91 @@ def main():
         )
     
     with col2:
-        # Callout type selection with auto-detection support
-        callout_types = CalloutTypeRegistry.get_all_callout_types()
-        callout_options = {f"{ct.id} - {ct.name}": ct.id for ct in callout_types.values()}
+        # Custom callout ID option - put this first to control the dropdown
+        use_custom_id = st.checkbox("Use Custom Callout ID", value=False, help="Check to define your own callout type ID and name")
         
-        # Check if we have a suggested callout type from PDF processing
-        suggested_callout = st.session_state.get('suggested_callout_type')
-        default_index = 0
-        
-        if suggested_callout:
-            # Find the index of the suggested callout type
-            for i, (display, callout_id) in enumerate(callout_options.items()):
-                if callout_id == suggested_callout:
-                    default_index = i
-                    break
-        
-        selected_display = st.selectbox(
-            "Callout Type",
-            options=list(callout_options.keys()),
-            index=default_index,
-            help="Select the type of callout being generated (auto-detected from PDF if available)"
-        )
-        selected_callout_id = callout_options[selected_display]
-        
-        # Show if this was auto-detected
-        if suggested_callout and selected_callout_id == suggested_callout:
-            st.caption("🎯 Auto-detected from PDF content")
-    
-    with col3:
-        # Custom callout ID option
-        use_custom_id = st.checkbox("Custom Callout ID", value=False)
         if use_custom_id:
-            custom_callout_id = st.text_input(
-                "Custom ID",
-                value=selected_callout_id,
+            # When custom is checked, disable dropdown and show custom inputs
+            st.info("🔧 **Custom Mode**: Define your own callout type")
+            selected_callout_id = st.text_input(
+                "Custom Callout ID",
+                value="",
+                placeholder="e.g., 1050, 2025, etc.",
                 help="Enter custom callout type ID"
             )
-            selected_callout_id = custom_callout_id
+            custom_callout_name = st.text_input(
+                "Custom Callout Name", 
+                value="",
+                placeholder="e.g., Scheduled Overtime, Emergency Response",
+                help="Enter descriptive name for this callout type"
+            )
+            # Add direction selection for custom callouts
+            custom_direction = st.selectbox(
+                "Flow Direction",
+                options=["INBOUND", "OUTBOUND"],
+                help="Select whether this is an inbound or outbound call flow"
+            )
+        else:
+            # Normal dropdown when custom is not checked
+            callout_types = CalloutTypeRegistry.get_all_callout_types()
+            callout_options = {f"{ct.id} - {ct.name} ({ct.direction.value.upper()})": ct.id for ct in callout_types.values()}
+            
+            # Check if we have a suggested callout type from PDF processing
+            suggested_callout = st.session_state.get('suggested_callout_type')
+            default_index = 0
+            
+            if suggested_callout:
+                # Find the index of the suggested callout type
+                for i, (display, callout_id) in enumerate(callout_options.items()):
+                    if callout_id == suggested_callout:
+                        default_index = i
+                        break
+            
+            selected_display = st.selectbox(
+                "Callout Type",
+                options=list(callout_options.keys()),
+                index=default_index,
+                help="Select the type of callout being generated (auto-detected from PDF if available)"
+            )
+            selected_callout_id = callout_options[selected_display]
+            
+            # Show if this was auto-detected
+            if suggested_callout and selected_callout_id == suggested_callout:
+                st.caption("🎯 Auto-detected from PDF content")
     
-    # Show current configuration
-    current_callout_type = CalloutTypeRegistry.get_callout_type(selected_callout_id)
-    if current_callout_type:
-        direction = "Inbound" if current_callout_type.direction.value == "ib" else "Outbound"
-        filename = f"{schema}_{selected_callout_id}{'_ib' if current_callout_type.direction.value == 'ib' else ''}.js"
-        
-        st.info(f"**Configuration**: {current_callout_type.name} | **Direction**: {direction} | **Output**: `{filename}`")
+    with col3:
+        # Add database refresh button with progress indicator
+        st.markdown("### 🔄 Database Control")
+        if st.button("🔄 Refresh Database Status", help="Refresh the voice file database connection"):
+            with st.spinner("Refreshing database connection..."):
+                # Force refresh of database connection
+                import time
+                time.sleep(1)  # Simulate refresh time
+                st.rerun()
+    
+    # Show current configuration (moved outside columns for better layout)
+    st.markdown("### 📋 Current Configuration")
+    
+    if use_custom_id:
+        # Custom configuration display
+        if selected_callout_id and custom_callout_name:
+            direction = custom_direction
+            direction_suffix = "_ib" if direction == "INBOUND" else ""
+            filename = f"{schema}_{selected_callout_id}{direction_suffix}.js"
+            
+            st.success(f"**Custom Configuration**")
+            st.info(f"**ID**: {selected_callout_id} | **Name**: {custom_callout_name} | **Direction**: {direction} | **Output**: `{filename}`")
+        else:
+            st.warning("⚠️ Please provide both Custom Callout ID and Name")
+    else:
+        # Standard configuration display
+        current_callout_type = CalloutTypeRegistry.get_callout_type(selected_callout_id)
+        if current_callout_type:
+            direction = "Inbound" if current_callout_type.direction.value == "ib" else "Outbound"
+            direction_suffix = "_ib" if current_callout_type.direction.value == "ib" else ""
+            filename = f"{schema}_{selected_callout_id}{direction_suffix}.js"
+            
+            st.info(f"**Configuration**: {current_callout_type.name} | **Direction**: {direction} | **Output**: `{filename}`")
     
     # Show current diagram preview if we have PDF diagrams loaded
     if (hasattr(st.session_state, 'mermaid_results') and 

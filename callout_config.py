@@ -101,6 +101,14 @@ class CalloutTypeRegistry:
             direction=CalloutDirection.OUTBOUND,
             schema_prefix="REU_NOTIFY",
             default_features=["reu_specific", "notification"]
+        ),
+        "1050": CalloutType(
+            id="1050",
+            name="Scheduled Overtime",
+            description="Scheduled overtime callout for utility workers",
+            direction=CalloutDirection.OUTBOUND,
+            schema_prefix="SCHEDULED_OT",
+            default_features=["scheduled_work", "overtime", "answering_machine", "pin_check"]
         )
     }
     
@@ -174,7 +182,8 @@ class CalloutConfiguration:
     def get_filename(self) -> str:
         """Generate appropriate filename based on configuration"""
         schema = self.custom_schema or self.schema
-        direction_suffix = f"_{self.direction.value}" if self.direction == CalloutDirection.INBOUND else ""
+        # Only add "_ib" suffix for inbound flows, outbound flows use base name
+        direction_suffix = "_ib" if self.direction == CalloutDirection.INBOUND else ""
         return f"{schema}_{self.callout_type_id}{direction_suffix}.js"
     
     def get_display_name(self) -> str:
